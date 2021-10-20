@@ -1,9 +1,15 @@
+//SYSTEM_THREAD(ENABLED);
+
+#define INTERNAL_SENSING_CODE
+
 #include <MQTT.h>
-// #include <OneWire/OneWire.h>
-// #include <spark-dallas-temperature/spark-dallas-temperature.h>
 #include "OneWire.h"
 #include <spark-dallas-temperature.h>
 #include <DS18.h>
+
+#ifdef INTERNAL_SENSING_CODE 
+#include <PietteTech_DHT/PietteTech_DHT.h>
+#endif
 
 /*
  * Project RelayControl
@@ -15,27 +21,49 @@
 
 char dev_name[32] = "";
 bool configured = false;
-char VERSION[64] = "2.0.1";
+char VERSION[64] = "2.1.2";
 
 /*
+// 2.1.2 Added heartbeat
+// 2.0.2. Add DHT22
 // 2.0 - major update for first integration adding Live MQTT Publish of data, Sensors added : DHT22, Current Sensor
 // 1.0 - Initial version - reading sensor and MQTT publish
 */
 
+#ifdef INTERNAL_SENSING_CODE
+#define DHTTYPE DHT22   // DHT 22  (AM2302)
+#endif
+
+#define DHTPIN   D5     // Digital pin for communications
+
+long nextHeartBeat;
+const long HEARTBEAT_INTERVAL = 5000;
+
 //Temp Buttons
 const int BUT3 = D7;
 const int BUT2 = D6;
-const int BUT1 = D5;
+//const int BUT1 = D5; // NOw DHT INput
 
 // PIN ASSIGNMENT
 const int RELAY1 = D4;
 const int RELAY2 = D3;
 const int RELAY3 = D2;
 
-const int DHT22_PIN = D0;
+const int DHT22_PIN = DHTPIN; 
 const int ONE_WIRE_BUS = D1;
 
 const int DEPTH_INPUT = A0;
+
+bool INTERNAL_TEMP_SENSING = true;
+bool DEPTH_SENSING = false;
+
+#ifdef INTERNAL_SENSING_CODE
+void dht_wrapper();                 // must be declared before the lib initialization
+PietteTech_DHT DHT(DHTPIN, DHTTYPE,dht_wrapper);
+void dht_wrapper() {
+  DHT.isrCallback();
+}
+#endif
 
 void consoleLog(String out){
   if (DEBUG_CONSOLE){
@@ -74,7 +102,7 @@ void checkButton(char name, int button, int pump){
 }
 
 void checkButtons(){
-  checkButton('1', BUT1, RELAY1);
+  // checkButton('1', BUT1, RELAY1);
   checkButton('2', BUT2, RELAY2);
   checkButton('3', BUT3, RELAY3);
 }
@@ -187,31 +215,39 @@ void deviceNameHandler(const char *topic, const char *data) {
 
 
 // setup() runs once, when the device is first turned on.
-void setup() {  
+void setup() {      
     Serial.begin(9600);
-
+    consoleLog("Device Startup");
     //setup temp buttons
-    pinMode(BUT1, INPUT_PULLDOWN);
-    pinMode(BUT2, INPUT_PULLDOWN);
-    pinMode(BUT3, INPUT_PULLDOWN);
+    // pinMode(BUT1, INPUT_PULLDOWN);
+    pinMode(BUT2, INPUT);
+    pinMode(BUT3, INPUT);
 
     pinMode(RELAY1, OUTPUT);
     pinMode(RELAY2, OUTPUT);
     pinMode(RELAY3, OUTPUT);
+
+    pinMode(DHT22_PIN,INPUT_PULLUP);
  
     // Setup Temp Sensing
-    // sensors.being();    
+    // sensors.being();  
+    #ifdef INTERNAL_SENSING_CODE
+    if (INTERNAL_TEMP_SENSING){
+      DHT.begin();
+    }        
+    #endif
 
-    if (sensor.read()){        
-        
+    if (sensor.read()){                
         sensor.addr(water_temp_addr);
-    }
-    
+    }    
 
     // Setup Depth Sensing
     pinMode(DEPTH_INPUT, INPUT);
-
+    
     // Configure Device
+    consoleLog("Awaiting Particle Connection");
+    waitUntil(Particle.connected);
+    consoleLog("Awaiting Particle Connected");
     Particle.subscribe("particle/device/name", deviceNameHandler, MY_DEVICES); // Use of MY_DEVICES as we are targeting old 1.5 API
     Particle.publish("particle/device/name", PRIVATE); 
 
@@ -230,6 +266,15 @@ const String LIVE = "live";
 const String STATE = "state";
 
 void publishMQTT(String updateType, String signal,  String value) {
+
+  String source = String(dev_name) +"/"+ updateType +"/"+ signal;
+  consoleLog(updateType+":"+source +"="+ value);    
+
+  if (!configured){
+    consoleLog("no MQTT, not yet configured.");      
+    return;
+  }
+
   if (!client.isConnected()) {
     //todo Record Client metrics
       clientConnect(); 
@@ -239,8 +284,6 @@ void publishMQTT(String updateType, String signal,  String value) {
     
     // What is this doing to munge the String
     // String::format("%s/%s/%s",dev_name, updateType, signal);
-    String source = String(dev_name) +"/"+ updateType +"/"+ signal;
-    consoleLog(updateType+":"+source +"="+ value);    
     client.publish(source, value);   
   }
   //todo
@@ -257,7 +300,6 @@ void publishState(String signal, String value){
 }
 
 void publishLiveDepth(float depth){
-  consoleLog(String::format("Depth:%.2f",depth) );
   publishLive(DEPTH_SIGNAL, String::format("%.2f", depth));            
 }
 
@@ -265,9 +307,8 @@ const String PRIMARY = "primary";
 const String SECONDARY = "secondary";
 void publishCurrent(String circuit, float current){
   // zombie_laser/live/primary/current/
-  publishLive(String::format("%s/%s", circuit, CURRENT_SIGNAL), String::format("%.2f", current));            
+  publishLive(circuit+"/"+CURRENT_SIGNAL, String::format("%.2f", current));            
 }
-
 
 int buttonStatus = false;
 // loop() runs over and over again, as quickly as it can execute.
@@ -281,15 +322,13 @@ float current;  //unit:mA
 #define PRINT_INTERVAL 1000
 #define RANGE 5000.0 // Depth measuring range 5000mm (for water)
 
-long nextMeasureTime(){
+unsigned long nextMeasureTime(){
   return millis() + 1000;
 }
 
-
-int reads =0 ;
-int rawValue= 0;
-long nextMeasure = 0; 
-
+int reads = 0;
+int rawValue = 0;
+unsigned long nextMeasure = 0; 
 
 const float ZERO_ADJUST = 565.0; //0.4 - Voltage.
 const float SIGNAL_VOLTAGE_MAX = 3.27;
@@ -303,82 +342,156 @@ float getDepth(){
   // Raw Value 645461 : count 1000 : average: 80.46, Voltage: 0.07, Depth: 113.94 // After sometime values fluxates .07-.08V
   float depth = voltage / SIGNAL_VOLTAGE_MAX * RANGE;
 
-  consoleLog(String::format("Raw Value %d : count %d : average: %.2f, Voltage: %.2f, Depth: %.2f",rawValue, reads, averageValue, voltage, depth));      
+  //consoleLog(String::format("Raw Value %d : count %d : average: %.2f, Voltage: %.2f, Depth: %.2f",rawValue, reads, averageValue, voltage, depth));      
   return depth;
 }
 
-void loop() { 
-    checkButtons();  
+void externalTemp(){
+  if (sensor.read(water_temp_addr)){        
+    float tempc = sensor.celsius();          
+    consoleLog(String::format("Temp: %.2fC",tempc));
+    publishLive(TEMPERATURE_SIGNAL, String::format("%.2f",tempc));
+  }
+}
 
-    if( millis() > nextMeasure){           
-      // temp sensiong
-      if (sensor.read(water_temp_addr)){        
-        float tempc = sensor.celsius();
-        
-        consoleLog(String::format("Temp: %.2fC",tempc));
-
-        publishLive(TEMPERATURE_SIGNAL, String::format("%.2f",tempc));
-      }
-      
-      publishLiveDepth(getDepth());
-
-
-
-      reads = 0;
-      rawValue = 0;      
-      nextMeasure = millis() + 1000; //nextMeasureTime();
-    }else{
-      int depthRead =  analogRead(DEPTH_INPUT);
-      rawValue += depthRead;
-      reads++;
-      //publishLiveDepth(getDepth());
-    }
-   
-/**
-
-    bool newLine = false;
-
-    int rawRead = readAnaloguePin(10, DEPTH_INPUT);
-
-    int dataVoltage = rawRead;
-    float dataCurrent = ((dataVoltage / 1024.0) * VREF_DEPTH) / 120.0; //Sense Resistor:120ohm
-    float depth = (dataCurrent - CURRENT_INIT) * (RANGE / DENSITY_WATER / 16.0); //Calculate depth from current readings
-
-
-    if (rawRead > 0 ){      
-      voltage =  rawRead/ 1024.0 * VREF_DEPTH;      
-      if (newLine){
-        newLine = false;
-        Serial.println("!");  
-      }
-
-      Serial.print("dataCurrent:");
-      Serial.print(dataCurrent);
-      Serial.print("mA  : ");
-
-      Serial.print("depth:");
-      Serial.print(depth);
-      Serial.print("mm  : ");
-
-      Serial.print("voltage:");
-      Serial.print(voltage);
-      Serial.print("mV  Raw: ");
-      Serial.print(rawRead);
-      Serial.print(" ");
-
-      current = voltage/120.0;  //Sense Resistor:120ohm  
-      Serial.print("current:");
-      Serial.print(current);
-      Serial.println("mA");
-    }else {
-      Serial.print(".");
-      newLine=true;
-    }
-
-    */
-
-    // delay(1000); // better to calculate next output time rather than locking up device. 
-    // i.e could be measuring average over last second 
-
+bool bDHTstarted = false;		                // flag to indicate we started acquisition
+void internalTemp(){
+  if (!INTERNAL_TEMP_SENSING){
+    return;
+  }
     
+  #ifdef INTERNAL_SENSING_CODE  
+  if (true || !DHT.acquiring()) {		// has sample completed?
+      publishState("internal/temp/get","1");
+      int result = DHT.acquireAndWait(2000);
+      publishState("internal/temp/get","0");
+	    // get DHT status
+	    // int result = DHT.getStatus();
+
+	    Serial.print("Read sensor: ");
+	    switch (result) {
+		case DHTLIB_OK:
+		    Serial.println("OK");
+		    break;
+		case DHTLIB_ERROR_CHECKSUM:
+		    Serial.println("Error\n\r\tChecksum error");
+		    break;
+		case DHTLIB_ERROR_ISR_TIMEOUT:
+		    Serial.println("Error\n\r\tISR time out error");
+		    break;
+		case DHTLIB_ERROR_RESPONSE_TIMEOUT:
+		    Serial.println("Error\n\r\tResponse time out error");
+		    break;
+		case DHTLIB_ERROR_DATA_TIMEOUT:
+		    Serial.println("Error\n\r\tData time out error");
+		    break;
+		case DHTLIB_ERROR_ACQUIRING:
+		    Serial.println("Error\n\r\tAcquiring");
+		    break;
+		case DHTLIB_ERROR_DELTA:
+		    Serial.println("Error\n\r\tDelta time to small");
+		    break;
+		case DHTLIB_ERROR_NOTSTARTED:
+		    Serial.println("Error\n\r\tNot started:Restarting");
+        DHT.begin();
+		    break;
+		default:
+		    Serial.println("Unknown error");
+		    break;
+	    }
+
+      #ifdef DEBUG_TEMP
+	    Serial.print("Humidity (%): ");
+	    Serial.println(DHT.getHumidity(), 2);
+
+	    Serial.print("Temperature (oC): ");
+	    Serial.println(DHT.getCelsius(), 2);
+
+	    Serial.print("Temperature (oF): ");
+	    Serial.println(DHT.getFahrenheit(), 2);
+
+	    Serial.print("Temperature (K): ");
+	    Serial.println(DHT.getKelvin(), 2);
+
+	    Serial.print("Dew Point (oC): ");
+	    Serial.println(DHT.getDewPoint());
+
+	    Serial.print("Dew Point Slow (oC): ");
+	    Serial.println(DHT.getDewPointSlow());
+      #endif
+    
+	    bDHTstarted = false;  // reset the sample flag so we can take another
+	    // DHTnextSampleTime = millis() + DHT_SAMPLE_INTERVAL;  // set the time for next sample
+	}
+  #endif
+
+}
+
+long heart;
+void publishHeartbeat(){
+  // Check if it is heartbeat time
+  if( millis() > nextHeartBeat){                
+      if (heart < ULONG_MAX){
+        heart++;
+      }else{
+        publishLive("heartbeat/rollover","1");
+        heart = 0;
+      }
+
+      publishLive("heartbeat", String(heart));  
+      nextHeartBeat = millis() + HEARTBEAT_INTERVAL;
+  }
+}
+
+void loop() { 
+  
+    //if (configured) {
+
+      checkButtons();  
+
+      publishHeartbeat();
+
+      if( millis() > nextMeasure){
+        publishState("measuring", "1");
+        // Depth Sensor
+        if (DEPTH_SENSING) {
+          publishLiveDepth(getDepth());      
+          reads = 0;
+          rawValue = 0;
+        }
+
+        // Environment Temperature Sensor.
+        externalTemp();
+
+        // Internal Temperature Sensor
+        internalTemp();        
+
+        nextMeasure = millis() + 1000; //nextMeasureTime();
+        publishState("measuring", "0");
+      }else{
+
+        if (DEPTH_SENSING){
+          //build depth average
+          int depthRead =  analogRead(DEPTH_INPUT);
+          rawValue += depthRead;
+          reads++;   
+        }
+
+        #ifdef INTERNAL_SENSING_CODE
+        if (INTERNAL_TEMP_SENSING){
+          // ensure DHT temp measure started
+          if (!bDHTstarted) {		// start the sample
+            Serial.print(": Retrieving information from sensor: ");
+            // DHT.acquire();
+            // DHT.acquireAndWait(2000);
+            bDHTstarted = true;
+          }
+        }
+        #endif
+        
+      }    
+
+      // Perform Pump control
+    //}
+
 }
