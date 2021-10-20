@@ -11,6 +11,9 @@
 #include <PietteTech_DHT/PietteTech_DHT.h>
 #endif
 
+#include "PowerShield.h"
+
+
 /*
  * Project RelayControl
  * Description: Adding Water depth sensor.
@@ -64,6 +67,9 @@ void dht_wrapper() {
   DHT.isrCallback();
 }
 #endif
+
+PowerShield batteryMonitor;
+
 
 void consoleLog(String out){
   if (DEBUG_CONSOLE){
@@ -244,6 +250,9 @@ void setup() {
     // Setup Depth Sensing
     pinMode(DEPTH_INPUT, INPUT);
     
+    batteryMonitor.begin(); 
+    batteryMonitor.quickStart();
+
     // Configure Device
     consoleLog("Awaiting Particle Connection");
     waitUntil(Particle.connected);
@@ -361,42 +370,42 @@ void internalTemp(){
   }
     
   #ifdef INTERNAL_SENSING_CODE  
-  if (true || !DHT.acquiring()) {		// has sample completed?
-      publishState("internal/temp/get","1");
-      int result = DHT.acquireAndWait(2000);
-      publishState("internal/temp/get","0");
+  if ( !DHT.acquiring()) {	
 	    // get DHT status
-	    // int result = DHT.getStatus();
+	    int result = DHT.getStatus();
 
-	    Serial.print("Read sensor: ");
+	    consoleLog("Read sensor: ");
 	    switch (result) {
 		case DHTLIB_OK:
-		    Serial.println("OK");
+		    consoleLog("OK");
+
+        publishLive("internal/humidity", String::format("%.2f",DHT.getHumidity()));
+        publishLive("internal/temperature", String::format("%.2f",DHT.getCelsius()));
+
 		    break;
 		case DHTLIB_ERROR_CHECKSUM:
-		    Serial.println("Error\n\r\tChecksum error");
+		    consoleLog("Error\n\r\tChecksum error");
 		    break;
 		case DHTLIB_ERROR_ISR_TIMEOUT:
-		    Serial.println("Error\n\r\tISR time out error");
+		    consoleLog("Error\n\r\tISR time out error");
 		    break;
 		case DHTLIB_ERROR_RESPONSE_TIMEOUT:
-		    Serial.println("Error\n\r\tResponse time out error");
+		    consoleLog("Error\n\r\tResponse time out error");
 		    break;
 		case DHTLIB_ERROR_DATA_TIMEOUT:
-		    Serial.println("Error\n\r\tData time out error");
+		    consoleLog("Error\n\r\tData time out error");
 		    break;
 		case DHTLIB_ERROR_ACQUIRING:
-		    Serial.println("Error\n\r\tAcquiring");
+		    consoleLog("Error\n\r\tAcquiring");
 		    break;
 		case DHTLIB_ERROR_DELTA:
-		    Serial.println("Error\n\r\tDelta time to small");
+		    consoleLog("Error\n\r\tDelta time to small");
 		    break;
 		case DHTLIB_ERROR_NOTSTARTED:
-		    Serial.println("Error\n\r\tNot started:Restarting");
-        DHT.begin();
+		    consoleLog("Error\n\r\tNot started:Restarting");        
 		    break;
 		default:
-		    Serial.println("Unknown error");
+		    consoleLog("Unknown error");
 		    break;
 	    }
 
@@ -419,7 +428,7 @@ void internalTemp(){
 	    Serial.print("Dew Point Slow (oC): ");
 	    Serial.println(DHT.getDewPointSlow());
       #endif
-    
+                
 	    bDHTstarted = false;  // reset the sample flag so we can take another
 	    // DHTnextSampleTime = millis() + DHT_SAMPLE_INTERVAL;  // set the time for next sample
 	}
@@ -441,6 +450,14 @@ void publishHeartbeat(){
       publishLive("heartbeat", String(heart));  
       nextHeartBeat = millis() + HEARTBEAT_INTERVAL;
   }
+}
+
+void monitorBattery(){
+    float cellVoltage = batteryMonitor.getVCell();
+    float stateOfCharge = batteryMonitor.getSoC();
+
+    publishLive("battery/voltage", String::format("%.2f",cellVoltage));
+    publishLive("battery/soc", String::format("%.2f",stateOfCharge));
 }
 
 void loop() { 
@@ -466,6 +483,8 @@ void loop() {
         // Internal Temperature Sensor
         internalTemp();        
 
+        monitorBattery();
+
         nextMeasure = millis() + 1000; //nextMeasureTime();
         publishState("measuring", "0");
       }else{
@@ -481,8 +500,8 @@ void loop() {
         if (INTERNAL_TEMP_SENSING){
           // ensure DHT temp measure started
           if (!bDHTstarted) {		// start the sample
-            Serial.print(": Retrieving information from sensor: ");
-            // DHT.acquire();
+            // Serial.print(": Retrieving information from sensor: ");
+            DHT.acquire();
             // DHT.acquireAndWait(2000);
             bDHTstarted = true;
           }
