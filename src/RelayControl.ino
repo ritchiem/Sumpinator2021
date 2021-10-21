@@ -260,6 +260,8 @@ void setup() {
     }
 #endif
 
+
+    //External Sensor
     if (sensor.read()) {
         sensor.addr(water_temp_addr);
     }
@@ -398,8 +400,8 @@ void internalTemp() {
             case DHTLIB_OK:
                 consoleLog("OK");
 
-                publishLive("internal/humidity", String::format("%.2f", DHT.getHumidity()));
-                publishLive("internal/temperature", String::format("%.2f", DHT.getCelsius()));
+                publishLive("internal/"+HUMIDITY_SIGNAL, String::format("%.2f", DHT.getHumidity()));
+                publishLive("internal/"+TEMPERATURE_SIGNAL, String::format("%.2f", DHT.getCelsius()));
 
                 break;
             case DHTLIB_ERROR_CHECKSUM:
@@ -589,7 +591,7 @@ void loop() {
     // checkButtons(currentStatus);
     
 
-//     if (millis() > nextMeasure) {
+    if (millis() > nextMeasure) {
 
 //         // Depth Sensor
 //         if (DEPTH_SENSING) {
@@ -598,8 +600,8 @@ void loop() {
 //             rawValue = 0;
 //         }
 
-//         // Environment Temperature Sensor.
-//         externalTemp();
+        // Environment Temperature Sensor.
+        externalTemp();
 
 //         // Internal Temperature Sensor
 //         // internalTemp();        
@@ -629,7 +631,7 @@ void loop() {
 //         }
 // #endif
 
-    // }
+    }
 
     // Perform Pump control
     // }
