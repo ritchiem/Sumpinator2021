@@ -25,9 +25,11 @@
 
 char dev_name[32] = "";
 bool configured = false;
-char VERSION[64] = "2.2.2";
+char VERSION[64] = "2.3.0";
 
 /*
+// 2.3.0 - skip state model and just make it work. 
+         - Re worked power managment.
 // 2.2.0 - move to status based model
 // 2.1.2 Added heartbeat
 // 2.0.2. Add DHT22
@@ -476,7 +478,7 @@ void monitorBattery() {
     float stateOfCharge = batteryMonitor.getSoC();
 
     publishLive("battery/voltage", String::format("%.2f", cellVoltage));
-    publishLive("battery/soc", String::format("%.2f", stateOfCharge));
+    publishLive("battery/soc", String::format("%.2f", stateOfCharge/256.0*100 )); // Range is 1-256 so make it %age
 }
 
 
@@ -589,12 +591,12 @@ void loop() {
     
     if (millis() > nextMeasure) {
         
-//         // Depth Sensor
-//         if (DEPTH_SENSING) {
-//             publishLiveDepth(getDepth());
-//             reads = 0;
-//             rawValue = 0;
-//         }
+        // Depth Sensor
+        if (DEPTH_SENSING) {
+            publishLiveDepth(getDepth());
+            reads = 0;
+            rawValue = 0;
+        }
 
         // todo One-wire bus reading seems actually introduce a delay as this didn't loop un checked when the nextMeasure wasn't defined.   
         // Environment Temperature Sensor. 
@@ -606,14 +608,14 @@ void loop() {
         internalTemp();        
 
         nextMeasure = millis() + MAIN_MEASURE_INTERVAL;        
-//     } else {
+    } else {
 
-//         if (DEPTH_SENSING) {
-//             //build depth average
-//             int depthRead = analogRead(DEPTH_INPUT);
-//             rawValue += depthRead;
-//             reads++;
-//         }
+        if (DEPTH_SENSING) {
+            //build depth average
+            int depthRead = analogRead(DEPTH_INPUT);
+            rawValue += depthRead;
+            reads++;
+        }
 
 // #ifdef INTERNAL_SENSING_CODE
 //         if (INTERNAL_TEMP_SENSING) {
