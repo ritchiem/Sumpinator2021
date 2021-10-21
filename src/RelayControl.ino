@@ -11,7 +11,7 @@
 #include <PietteTech_DHT/PietteTech_DHT.h>
 #endif
 
-#include "PowerShield.h"
+#include <PowerShield.h>
 
 
 /*
@@ -43,14 +43,15 @@ long nextHeartBeat;
 const long HEARTBEAT_INTERVAL = 5000;
 
 //Temp Buttons
-const int BUT3 = D7;
+const int DC_POWER_GOOD = D7;
 const int BUT2 = D6;
-//const int BUT1 = D5; // NOw DHT INput
+const int ABUT2 = A2;
+const int ABUT3 = A3;
 
 // PIN ASSIGNMENT
-const int RELAY1 = D4;
-const int RELAY2 = D3;
-const int RELAY3 = D2;
+const int AC_SELECTION = D4;
+const int PUMP1 = D3;
+const int PUMP2 = D2;
 
 const int DHT22_PIN = DHTPIN; 
 const int ONE_WIRE_BUS = D1;
@@ -77,6 +78,8 @@ void consoleLog(String out){
   }
 }
 
+int PRIMARY_AC = LOW;
+int SECONDARY_AC = HIGH;
 int PUMP_OFF = LOW;
 int PUMP_ON = HIGH;
 
@@ -86,21 +89,19 @@ void setPumpStatus(int value, int pump){
       digitalWrite(pump, value);
 }
 
-void checkButton(char name, int button, int pump){
+void checkButton(String name, int button, int pump){
 
   int buttonStatus = digitalRead(button);  
 
-  //consoleLog(String::format("Button %c Status : %d", name, buttonStatus));   
-
   if (buttonStatus){
     if (digitalRead(pump) == PUMP_OFF){
-      publishState(String::format("button/%d",button),"1");
+      publishState("button/"+name,"1");
     }
     setPumpStatus(PUMP_ON, pump);        
   }else {    
     
     if (digitalRead(pump) == PUMP_ON){
-      publishState(String::format("button/%d",button),"0");
+      publishState("button/"+name,"0");
     }
 
     setPumpStatus(PUMP_OFF, pump); 
@@ -108,9 +109,10 @@ void checkButton(char name, int button, int pump){
 }
 
 void checkButtons(){
-  // checkButton('1', BUT1, RELAY1);
-  checkButton('2', BUT2, RELAY2);
-  checkButton('3', BUT3, RELAY3);
+  checkButton("2", BUT2, PUMP2);
+  checkButton("A2", ABUT2, PUMP1);
+  // checkButton("A3", ABUT3, AC_SELECTION);
+  // checkButton("DC_Power", DC_POWER_GOOD, AC_SELECTION);  
 }
 
 
@@ -224,14 +226,23 @@ void deviceNameHandler(const char *topic, const char *data) {
 void setup() {      
     Serial.begin(9600);
     consoleLog("Device Startup");
-    //setup temp buttons
-    // pinMode(BUT1, INPUT_PULLDOWN);
-    pinMode(BUT2, INPUT);
-    pinMode(BUT3, INPUT);
+    //setup temp buttons    
+    pinMode(ABUT2, INPUT_PULLDOWN);
+    pinMode(ABUT3, INPUT_PULLDOWN);
 
-    pinMode(RELAY1, OUTPUT);
-    pinMode(RELAY2, OUTPUT);
-    pinMode(RELAY3, OUTPUT);
+    pinMode(BUT2, INPUT_PULLDOWN);
+
+    pinMode(DC_POWER_GOOD, INPUT_PULLDOWN);
+
+    pinMode(AC_SELECTION, OUTPUT);
+    pinMode(PUMP1, OUTPUT);
+    pinMode(PUMP2, OUTPUT);
+
+    setPumpStatus(PUMP_OFF, PUMP1); 
+    setPumpStatus(PUMP_OFF, PUMP2); 
+    setPumpStatus(PRIMARY_AC, AC_SELECTION); 
+
+    consoleLog(String::format("Current AC Selection: %d", digitalRead(DC_POWER_GOOD)));
 
     pinMode(DHT22_PIN,INPUT_PULLUP);
  
@@ -428,7 +439,7 @@ void internalTemp(){
 	    Serial.print("Dew Point Slow (oC): ");
 	    Serial.println(DHT.getDewPointSlow());
       #endif
-                
+
 	    bDHTstarted = false;  // reset the sample flag so we can take another
 	    // DHTnextSampleTime = millis() + DHT_SAMPLE_INTERVAL;  // set the time for next sample
 	}
@@ -460,16 +471,50 @@ void monitorBattery(){
     publishLive("battery/soc", String::format("%.2f",stateOfCharge));
 }
 
+
+
+
+void togglePowerInput(){
+    int currentState = digitalRead(AC_SELECTION);
+    digitalWrite(AC_SELECTION, !currentState);
+}      
+
+bool onPrimary = true;
+void checkMainPower(){
+      
+  int powerOn = digitalRead(DC_POWER_GOOD);
+
+  if (onPrimary){
+    if (!powerOn){
+      publishState("power/active", String(powerOn));
+      //togglePowerInput();
+      setPumpStatus(SECONDARY_AC, AC_SELECTION);
+      onPrimary = false;
+    }
+  }else{
+    if (powerOn){
+      publishState("power/active", String(powerOn));
+      // togglePowerInput();
+      setPumpStatus(PRIMARY_AC,AC_SELECTION);
+      onPrimary = true;
+    }
+  }
+
+  
+}
+
 void loop() { 
   
     //if (configured) {
 
+      checkMainPower();
+      
       checkButtons();  
 
       publishHeartbeat();
 
       if( millis() > nextMeasure){
-        publishState("measuring", "1");
+        
         // Depth Sensor
         if (DEPTH_SENSING) {
           publishLiveDepth(getDepth());      
@@ -481,12 +526,12 @@ void loop() {
         externalTemp();
 
         // Internal Temperature Sensor
-        internalTemp();        
+        // internalTemp();        
 
-        monitorBattery();
+        // monitorBattery();
 
         nextMeasure = millis() + 1000; //nextMeasureTime();
-        publishState("measuring", "0");
+        
       }else{
 
         if (DEPTH_SENSING){
