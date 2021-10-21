@@ -606,7 +606,7 @@ void loop() {
 //         // Internal Temperature Sensor
 //         // internalTemp();        
 
-//         // monitorBattery();
+        monitorBattery();
 
 //         nextMeasure = millis() + 1000; //nextMeasureTime();
 
