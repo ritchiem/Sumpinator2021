@@ -588,7 +588,7 @@ void loop() {
     // checkButtons(currentStatus);
     
     if (millis() > nextMeasure) {
-
+        
 //         // Depth Sensor
 //         if (DEPTH_SENSING) {
 //             publishLiveDepth(getDepth());
@@ -596,16 +596,16 @@ void loop() {
 //             rawValue = 0;
 //         }
 
-        // Environment Temperature Sensor.
+        // todo One-wire bus reading seems actually introduce a delay as this didn't loop un checked when the nextMeasure wasn't defined.   
+        // Environment Temperature Sensor. 
         externalTemp();
+
+        monitorBattery();
 
         // Internal Temperature Sensor
         internalTemp();        
 
-        monitorBattery();
-
-        nextMeasure = millis() + MAIN_MEASURE_INTERVAL;
-
+        nextMeasure = millis() + MAIN_MEASURE_INTERVAL;        
 //     } else {
 
 //         if (DEPTH_SENSING) {
