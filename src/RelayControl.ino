@@ -64,7 +64,7 @@ const int ONE_WIRE_BUS = D1;
 const int DEPTH_INPUT = A0;
 
 bool INTERNAL_TEMP_SENSING = true;
-bool DEPTH_SENSING = false;
+bool DEPTH_SENSING = true;
 
 #ifdef INTERNAL_SENSING_CODE
 
