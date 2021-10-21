@@ -599,6 +599,7 @@ void loop() {
         }
 
         // todo One-wire bus reading seems actually introduce a delay as this didn't loop un checked when the nextMeasure wasn't defined.   
+        // might have been due to internal temp sensing without the .acquire() setup off measure cycle.
         // Environment Temperature Sensor. 
         externalTemp();
 
@@ -617,17 +618,17 @@ void loop() {
             reads++;
         }
 
-// #ifdef INTERNAL_SENSING_CODE
-//         if (INTERNAL_TEMP_SENSING) {
-//             // ensure DHT temp measure started
-//             if (!bDHTstarted) {        // start the sample
-//                 // Serial.print(": Retrieving information from sensor: ");
-//                 DHT.acquire();
-//                 // DHT.acquireAndWait(2000);
-//                 bDHTstarted = true;
-//             }
-//         }
-// #endif
+#ifdef INTERNAL_SENSING_CODE
+        if (INTERNAL_TEMP_SENSING) {
+            // ensure DHT temp measure started
+            if (!bDHTstarted) {        // start the sample
+                // Serial.print(": Retrieving information from sensor: ");
+                DHT.acquire();
+                // DHT.acquireAndWait(2000);
+                bDHTstarted = true;
+            }
+        }
+#endif
 
     }
 
