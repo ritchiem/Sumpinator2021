@@ -43,6 +43,7 @@ char VERSION[64] = "2.2.2";
 
 
 const long HEARTBEAT_INTERVAL = 5000;
+const long MAIN_MEASURE_INTERVAL = 1000;
 
 //Temp Buttons
 const int DC_POWER_GOOD = D6;
@@ -352,10 +353,6 @@ float current;  //unit:mA
 #define PRINT_INTERVAL 1000
 #define RANGE 5000.0 // Depth measuring range 5000mm (for water)
 
-unsigned long nextMeasureTime() {
-    return millis() + 1000;
-}
-
 int reads = 0;
 int rawValue = 0;
 unsigned long nextMeasure = 0;
@@ -590,7 +587,6 @@ void loop() {
     // }
     // checkButtons(currentStatus);
     
-
     if (millis() > nextMeasure) {
 
 //         // Depth Sensor
@@ -603,12 +599,12 @@ void loop() {
         // Environment Temperature Sensor.
         externalTemp();
 
-//         // Internal Temperature Sensor
-//         // internalTemp();        
+        // Internal Temperature Sensor
+        internalTemp();        
 
         monitorBattery();
 
-//         nextMeasure = millis() + 1000; //nextMeasureTime();
+        nextMeasure = millis() + MAIN_MEASURE_INTERVAL;
 
 //     } else {
 
