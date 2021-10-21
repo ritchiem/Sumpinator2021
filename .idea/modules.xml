@@ -3,6 +3,7 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/.idea/RelayControl.iml" filepath="$PROJECT_DIR$/.idea/RelayControl.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/RelayControl2.iml" filepath="$PROJECT_DIR$/.idea/RelayControl2.iml" />
     </modules>
   </component>
 </project>

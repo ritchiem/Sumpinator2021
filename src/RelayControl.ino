@@ -7,12 +7,13 @@
 #include <spark-dallas-temperature.h>
 #include <DS18.h>
 
-#ifdef INTERNAL_SENSING_CODE 
+#ifdef INTERNAL_SENSING_CODE
+
 #include <PietteTech_DHT/PietteTech_DHT.h>
+
 #endif
 
 #include <PowerShield.h>
-
 
 /*
  * Project RelayControl
@@ -24,9 +25,10 @@
 
 char dev_name[32] = "";
 bool configured = false;
-char VERSION[64] = "2.1.2";
+char VERSION[64] = "2.2.2";
 
 /*
+// 2.2.0 - move to status based model
 // 2.1.2 Added heartbeat
 // 2.0.2. Add DHT22
 // 2.0 - major update for first integration adding Live MQTT Publish of data, Sensors added : DHT22, Current Sensor
@@ -39,12 +41,12 @@ char VERSION[64] = "2.1.2";
 
 #define DHTPIN   D5     // Digital pin for communications
 
-long nextHeartBeat;
+
 const long HEARTBEAT_INTERVAL = 5000;
 
 //Temp Buttons
-const int DC_POWER_GOOD = D7;
-const int BUT2 = D6;
+const int DC_POWER_GOOD = D6;
+const int BUT2 = A4;
 const int ABUT2 = A2;
 const int ABUT3 = A3;
 
@@ -53,7 +55,7 @@ const int AC_SELECTION = D4;
 const int PUMP1 = D3;
 const int PUMP2 = D2;
 
-const int DHT22_PIN = DHTPIN; 
+const int DHT22_PIN = DHTPIN;
 const int ONE_WIRE_BUS = D1;
 
 const int DEPTH_INPUT = A0;
@@ -62,20 +64,23 @@ bool INTERNAL_TEMP_SENSING = true;
 bool DEPTH_SENSING = false;
 
 #ifdef INTERNAL_SENSING_CODE
+
 void dht_wrapper();                 // must be declared before the lib initialization
-PietteTech_DHT DHT(DHTPIN, DHTTYPE,dht_wrapper);
+PietteTech_DHT DHT(DHTPIN, DHTTYPE, dht_wrapper);
+
 void dht_wrapper() {
-  DHT.isrCallback();
+    DHT.isrCallback();
 }
+
 #endif
 
 PowerShield batteryMonitor;
 
 
-void consoleLog(String out){
-  if (DEBUG_CONSOLE){
-    Serial.println(out);   
-  }
+void consoleLog(String out) {
+    if (DEBUG_CONSOLE) {
+        Serial.println(out);
+    }
 }
 
 int PRIMARY_AC = LOW;
@@ -85,34 +90,34 @@ int PUMP_ON = HIGH;
 
 // Tmp Butons
 
-void setPumpStatus(int value, int pump){
-      digitalWrite(pump, value);
+void setPumpStatus(int value, int pump) {
+    digitalWrite(pump, value);
 }
 
-void checkButton(String name, int button, int pump){
+void checkButton(String name, int button, int pump) {
 
-  int buttonStatus = digitalRead(button);  
+    int buttonStatus = digitalRead(button);
 
-  if (buttonStatus){
-    if (digitalRead(pump) == PUMP_OFF){
-      publishState("button/"+name,"1");
+    if (buttonStatus) {
+        if (digitalRead(pump) == PUMP_OFF) {
+            publishState("button/" + name, "1");
+        }
+        setPumpStatus(PUMP_ON, pump);
+    } else {
+
+        if (digitalRead(pump) == PUMP_ON) {
+            publishState("button/" + name, "0");
+        }
+
+        setPumpStatus(PUMP_OFF, pump);
     }
-    setPumpStatus(PUMP_ON, pump);        
-  }else {    
-    
-    if (digitalRead(pump) == PUMP_ON){
-      publishState("button/"+name,"0");
-    }
-
-    setPumpStatus(PUMP_OFF, pump); 
-  }
 }
 
-void checkButtons(){
-  checkButton("2", BUT2, PUMP2);
-  checkButton("A2", ABUT2, PUMP1);
-  // checkButton("A3", ABUT3, AC_SELECTION);
-  // checkButton("DC_Power", DC_POWER_GOOD, AC_SELECTION);  
+void checkButtons() {
+    checkButton("2", BUT2, PUMP2);
+    checkButton("A2", ABUT2, PUMP1);
+    // checkButton("A3", ABUT3, AC_SELECTION);
+    // checkButton("DC_Power", DC_POWER_GOOD, AC_SELECTION);
 }
 
 
@@ -124,152 +129,154 @@ uint8_t water_temp_addr[8];
 // DEPTH SENSING
 #define VREF_DEPTH 3470.0 // ADC's reference voltage
 
-unsigned int readAnaloguePin(int COUNTS, int INPUT_PIN) {  
-  unsigned int peakVoltage = 0;    
-  bool skipRead=false;
-  for (int i = 0; i < COUNTS; i++)
-  {
-    int rawValue = analogRead(INPUT_PIN);   //read peak voltage
-    if (rawValue > 0){
-      peakVoltage += rawValue;
-    }else{
-      Serial.print("^");
-      skipRead=true;
-      i--; // count agin
-    }    
-    delay(1);
-  }
+unsigned int readAnaloguePin(int COUNTS, int INPUT_PIN) {
+    unsigned int peakVoltage = 0;
+    bool skipRead = false;
+    for (int i = 0; i < COUNTS; i++) {
+        int rawValue = analogRead(INPUT_PIN);   //read peak voltage
+        if (rawValue > 0) {
+            peakVoltage += rawValue;
+        } else {
+            Serial.print("^");
+            skipRead = true;
+            i--; // count agin
+        }
+        delay(1);
+    }
 
-  if (skipRead){
-    Serial.println("\\/");
-  }
+    if (skipRead) {
+        Serial.println("\\/");
+    }
 
-  peakVoltage = peakVoltage / COUNTS;   
-  
-  return peakVoltage;
+    peakVoltage = peakVoltage / COUNTS;
+
+    return peakVoltage;
 }
 
-float readAnaloguePin(int INPUT_PIN)
-{
-  return readAnaloguePin(5, INPUT_PIN);
+float readAnaloguePin(int INPUT_PIN) {
+    return readAnaloguePin(5, INPUT_PIN);
 }
 
 
-void callback(char* topic, byte* payload, unsigned int length);
+void callback(char *topic, byte *payload, unsigned int length);
+
 MQTT client("10.10.10.59", 1883, callback);
 
-void callback(char* topic, byte* payload, unsigned int length) {
-  char p[length + 1];
-  memcpy(p, payload, length);
-  p[length] = NULL;
-  consoleLog(String::format("received %s",p));
+void callback(char *topic, byte *payload, unsigned int length) {
+    char p[length + 1];
+    memcpy(p, payload, length);
+    p[length] = NULL;
+    consoleLog(String::format("received %s", p));
 }
 
 
-
-void clientConnect(){
-  consoleLog(String::format("Connecting as %s.",dev_name));
-  client.connect(dev_name, "particle", "device");
+void clientConnect() {
+    consoleLog(String::format("Connecting as %s.", dev_name));
+    client.connect(dev_name, "particle", "device");
 }
 
 // const int BUTTON_PIN = D1;
 // const int SWITCH_PIN = D0;
 
-void configureDevice(){
+void configureDevice() {
 
-  String device_name = "unknown";
+    String device_name = "unknown";
 
-  if (strcmp("zombie_lazer", dev_name) == 0 ){
-    //device_name = "zombie_lazer";
-   // strlcpy(auth, "A7QWTTz27Zly-vWq9_Rnfry242Bx996Y",32); // <-- Sump Pump -- for Blynk
-  }
+    if (strcmp("zombie_lazer", dev_name) == 0) {
+        //device_name = "zombie_lazer";
+        // strlcpy(auth, "A7QWTTz27Zly-vWq9_Rnfry242Bx996Y",32); // <-- Sump Pump -- for Blynk
+    }
 
-  String json = "{ \"device_name\" : \"" + String::format("%s",dev_name) + "\""
-                    // + ",\"dev_name\" : \"" + String(dev_name) + "\""
-                    // + ",\"device_name_check\" : \"" + strcmp("zombie_laser", dev_name) + "\""
-                    + ",\"verison\" : \"" + String(VERSION) + "\""
-                    // + ",\"batteryConnected\" : " + String(batteryConnected)
-                    // + ",\"rangeFinderEnabled\" : " + String(rangeFinderEnabled)
-                    // + ",\"tempHumidityEnabled\" : " + String(tempHumidityEnabled)
-                    // + ",\"acCurrentEnabled\" : " + String(acCurrentEnabled)
-                    // + ",\"virtualPumpOnDevice\" : " + String(virtualPumpOnDevice)                    
-                    // + ",\"batteryPublishModifier\" : " + String(batteryPublishRate)
-                    // + ",\"sensorPublishFrequency\" : " + String(SAMPLE_INTERVAL)
-                    +" }";
+    String json = "{ \"device_name\" : \"" + String::format("%s", dev_name) + "\""
+                  // + ",\"dev_name\" : \"" + String(dev_name) + "\""
+                  // + ",\"device_name_check\" : \"" + strcmp("zombie_laser", dev_name) + "\""
+                  + ",\"verison\" : \"" + String(VERSION) + "\""
+                  // + ",\"batteryConnected\" : " + String(batteryConnected)
+                  // + ",\"rangeFinderEnabled\" : " + String(rangeFinderEnabled)
+                  // + ",\"tempHumidityEnabled\" : " + String(tempHumidityEnabled)
+                  // + ",\"acCurrentEnabled\" : " + String(acCurrentEnabled)
+                  // + ",\"virtualPumpOnDevice\" : " + String(virtualPumpOnDevice)
+                  // + ",\"batteryPublishModifier\" : " + String(batteryPublishRate)
+                  // + ",\"sensorPublishFrequency\" : " + String(SAMPLE_INTERVAL)
+                  + " }";
 
-  // this is not good this will corrupt the subscribe as it shares buffer... but we've copied the data by this point so we're good
-  Particle.publish("Sump Pump Control:", json, 60, PRIVATE);
-  Particle.variable("config", json.c_str(), STRING); 
-  // Not sure why passing the String in directly doesn't work but I was getting jibberish out of the API.
+    // this is not good this will corrupt the subscribe as it shares buffer... but we've copied the data by this point so we're good
+    Particle.publish("Sump Pump Control:", json, 60, PRIVATE);
+    Particle.variable("config", json.c_str(), STRING);
+    // Not sure why passing the String in directly doesn't work but I was getting jibberish out of the API.
 
-  clientConnect();
+    clientConnect();
 
 
-  configured = true;
-  publishState("version", VERSION);
-  
-  // // Connect here so we're good... hopefully.
-  // if (!Blynk.connected()) {
-  //   Blynk.connect();           
-  // }
+    configured = true;
+    publishState("version", VERSION);
+    publishState("config", json);
+    
+
+    // // Connect here so we're good... hopefully.
+    // if (!Blynk.connected()) {
+    //   Blynk.connect();
+    // }
 
 }
 
 void deviceNameHandler(const char *topic, const char *data) {
-  strncpy(dev_name, data, sizeof(dev_name));  
-  configureDevice();
-  Particle.unsubscribe();  // Note this will unsubscribe all handlers. Currently we only have one so no biggie.
+    strncpy(dev_name, data, sizeof(dev_name));
+    configureDevice();
+    Particle.unsubscribe();  // Note this will unsubscribe all handlers. Currently we only have one so no biggie.
 }
 
 
 // setup() runs once, when the device is first turned on.
-void setup() {      
+void setup() {
     Serial.begin(9600);
     consoleLog("Device Startup");
+
     //setup temp buttons    
     pinMode(ABUT2, INPUT_PULLDOWN);
     pinMode(ABUT3, INPUT_PULLDOWN);
 
     pinMode(BUT2, INPUT_PULLDOWN);
 
-    pinMode(DC_POWER_GOOD, INPUT_PULLDOWN);
+    pinMode(DC_POWER_GOOD, INPUT_PULLUP);    
 
     pinMode(AC_SELECTION, OUTPUT);
     pinMode(PUMP1, OUTPUT);
     pinMode(PUMP2, OUTPUT);
 
-    setPumpStatus(PUMP_OFF, PUMP1); 
-    setPumpStatus(PUMP_OFF, PUMP2); 
-    setPumpStatus(PRIMARY_AC, AC_SELECTION); 
+    setPumpStatus(PUMP_OFF, PUMP1);
+    setPumpStatus(PUMP_OFF, PUMP2);
+    setPumpStatus(PRIMARY_AC, AC_SELECTION);
 
     consoleLog(String::format("Current AC Selection: %d", digitalRead(DC_POWER_GOOD)));
 
-    pinMode(DHT22_PIN,INPUT_PULLUP);
- 
+    pinMode(DHT22_PIN, INPUT_PULLUP);
+
     // Setup Temp Sensing
     // sensors.being();  
-    #ifdef INTERNAL_SENSING_CODE
-    if (INTERNAL_TEMP_SENSING){
-      DHT.begin();
-    }        
-    #endif
+#ifdef INTERNAL_SENSING_CODE
+    if (INTERNAL_TEMP_SENSING) {
+        DHT.begin();
+    }
+#endif
 
-    if (sensor.read()){                
+    if (sensor.read()) {
         sensor.addr(water_temp_addr);
-    }    
+    }
 
     // Setup Depth Sensing
     pinMode(DEPTH_INPUT, INPUT);
-    
-    batteryMonitor.begin(); 
+
+    batteryMonitor.begin();
     batteryMonitor.quickStart();
 
     // Configure Device
     consoleLog("Awaiting Particle Connection");
     waitUntil(Particle.connected);
     consoleLog("Awaiting Particle Connected");
-    Particle.subscribe("particle/device/name", deviceNameHandler, MY_DEVICES); // Use of MY_DEVICES as we are targeting old 1.5 API
-    Particle.publish("particle/device/name", PRIVATE); 
+    Particle.subscribe("particle/device/name", deviceNameHandler,
+                       MY_DEVICES); // Use of MY_DEVICES as we are targeting old 1.5 API
+    Particle.publish("particle/device/name", PRIVATE);
 
 }
 
@@ -285,49 +292,50 @@ const String LIVE = "live";
 //const String UPDATE= "update";
 const String STATE = "state";
 
-void publishMQTT(String updateType, String signal,  String value) {
+void publishMQTT(String updateType, String signal, String value) {
 
-  String source = String(dev_name) +"/"+ updateType +"/"+ signal;
-  consoleLog(updateType+":"+source +"="+ value);    
+    String source = String(dev_name) + "/" + updateType + "/" + signal;
+    consoleLog(updateType + ":" + source + "=" + value);
 
-  if (!configured){
-    consoleLog("no MQTT, not yet configured.");      
-    return;
-  }
+    if (!configured) {
+        consoleLog("no MQTT, not yet configured.");
+        return;
+    }
 
-  if (!client.isConnected()) {
-    //todo Record Client metrics
-      clientConnect(); 
-  }
+    if (!client.isConnected()) {
+        //todo Record Client metrics
+        clientConnect();
+    }
 
-  if (client.isConnected()){
-    
-    // What is this doing to munge the String
-    // String::format("%s/%s/%s",dev_name, updateType, signal);
-    client.publish(source, value);   
-  }
-  //todo
-  //else Record Client metrics
+    if (client.isConnected()) {
+
+        // What is this doing to munge the String
+        // String::format("%s/%s/%s",dev_name, updateType, signal);
+        client.publish(source, value);
+    }
+    //todo
+    //else Record Client metrics
 }
 
-void publishLive(String signal, String value){
- 
-  publishMQTT(LIVE, signal, value);   
+void publishLive(String signal, String value) {
+
+    publishMQTT(LIVE, signal, value);
 }
 
-void publishState(String signal, String value){
-  publishMQTT(STATE, signal, value);   
+void publishState(String signal, String value) {
+    publishMQTT(STATE, signal, value);
 }
 
-void publishLiveDepth(float depth){
-  publishLive(DEPTH_SIGNAL, String::format("%.2f", depth));            
+void publishLiveDepth(float depth) {
+    publishLive(DEPTH_SIGNAL, String::format("%.2f", depth));
 }
 
 const String PRIMARY = "primary";
 const String SECONDARY = "secondary";
-void publishCurrent(String circuit, float current){
-  // zombie_laser/live/primary/current/
-  publishLive(circuit+"/"+CURRENT_SIGNAL, String::format("%.2f", current));            
+
+void publishCurrent(String circuit, float current) {
+    // zombie_laser/live/primary/current/
+    publishLive(circuit + "/" + CURRENT_SIGNAL, String::format("%.2f", current));
 }
 
 int buttonStatus = false;
@@ -342,220 +350,288 @@ float current;  //unit:mA
 #define PRINT_INTERVAL 1000
 #define RANGE 5000.0 // Depth measuring range 5000mm (for water)
 
-unsigned long nextMeasureTime(){
-  return millis() + 1000;
+unsigned long nextMeasureTime() {
+    return millis() + 1000;
 }
 
 int reads = 0;
 int rawValue = 0;
-unsigned long nextMeasure = 0; 
+unsigned long nextMeasure = 0;
 
 const float ZERO_ADJUST = 565.0; //0.4 - Voltage.
 const float SIGNAL_VOLTAGE_MAX = 3.27;
 const float SIGNAL_RANGE_MAX = 4096.0 - ZERO_ADJUST;
 
-float getDepth(){
-  float averageValue =  (float)rawValue / (float) reads - ZERO_ADJUST;
-  float voltage = (float) averageValue * (SIGNAL_VOLTAGE_MAX / SIGNAL_RANGE_MAX);
-  /// voltage 0 - 3.3v == 4-20ma == 0-5000mm      
-  // Raw Value 557629 : count 1000 : average: 557.63, Voltage: 0.45, Depth: -15.02
-  // Raw Value 645461 : count 1000 : average: 80.46, Voltage: 0.07, Depth: 113.94 // After sometime values fluxates .07-.08V
-  float depth = voltage / SIGNAL_VOLTAGE_MAX * RANGE;
+float getDepth() {
+    float averageValue = (float) rawValue / (float) reads - ZERO_ADJUST;
+    float voltage = (float) averageValue * (SIGNAL_VOLTAGE_MAX / SIGNAL_RANGE_MAX);
+    /// voltage 0 - 3.3v == 4-20ma == 0-5000mm
+    // Raw Value 557629 : count 1000 : average: 557.63, Voltage: 0.45, Depth: -15.02
+    // Raw Value 645461 : count 1000 : average: 80.46, Voltage: 0.07, Depth: 113.94 // After sometime values fluxates .07-.08V
+    float depth = voltage / SIGNAL_VOLTAGE_MAX * RANGE;
 
-  //consoleLog(String::format("Raw Value %d : count %d : average: %.2f, Voltage: %.2f, Depth: %.2f",rawValue, reads, averageValue, voltage, depth));      
-  return depth;
+    //consoleLog(String::format("Raw Value %d : count %d : average: %.2f, Voltage: %.2f, Depth: %.2f",rawValue, reads, averageValue, voltage, depth));
+    return depth;
 }
 
-void externalTemp(){
-  if (sensor.read(water_temp_addr)){        
-    float tempc = sensor.celsius();          
-    consoleLog(String::format("Temp: %.2fC",tempc));
-    publishLive(TEMPERATURE_SIGNAL, String::format("%.2f",tempc));
-  }
+void externalTemp() {
+    if (sensor.read(water_temp_addr)) {
+        float tempc = sensor.celsius();
+        consoleLog(String::format("Temp: %.2fC", tempc));
+        publishLive(TEMPERATURE_SIGNAL, String::format("%.2f", tempc));
+    }
 }
 
-bool bDHTstarted = false;		                // flag to indicate we started acquisition
-void internalTemp(){
-  if (!INTERNAL_TEMP_SENSING){
-    return;
-  }
-    
-  #ifdef INTERNAL_SENSING_CODE  
-  if ( !DHT.acquiring()) {	
-	    // get DHT status
-	    int result = DHT.getStatus();
+bool bDHTstarted = false;                        // flag to indicate we started acquisition
+void internalTemp() {
+    if (!INTERNAL_TEMP_SENSING) {
+        return;
+    }
 
-	    consoleLog("Read sensor: ");
-	    switch (result) {
-		case DHTLIB_OK:
-		    consoleLog("OK");
+#ifdef INTERNAL_SENSING_CODE
+    if (!DHT.acquiring()) {
+        // get DHT status
+        int result = DHT.getStatus();
 
-        publishLive("internal/humidity", String::format("%.2f",DHT.getHumidity()));
-        publishLive("internal/temperature", String::format("%.2f",DHT.getCelsius()));
+        consoleLog("Read sensor: ");
+        switch (result) {
+            case DHTLIB_OK:
+                consoleLog("OK");
 
-		    break;
-		case DHTLIB_ERROR_CHECKSUM:
-		    consoleLog("Error\n\r\tChecksum error");
-		    break;
-		case DHTLIB_ERROR_ISR_TIMEOUT:
-		    consoleLog("Error\n\r\tISR time out error");
-		    break;
-		case DHTLIB_ERROR_RESPONSE_TIMEOUT:
-		    consoleLog("Error\n\r\tResponse time out error");
-		    break;
-		case DHTLIB_ERROR_DATA_TIMEOUT:
-		    consoleLog("Error\n\r\tData time out error");
-		    break;
-		case DHTLIB_ERROR_ACQUIRING:
-		    consoleLog("Error\n\r\tAcquiring");
-		    break;
-		case DHTLIB_ERROR_DELTA:
-		    consoleLog("Error\n\r\tDelta time to small");
-		    break;
-		case DHTLIB_ERROR_NOTSTARTED:
-		    consoleLog("Error\n\r\tNot started:Restarting");        
-		    break;
-		default:
-		    consoleLog("Unknown error");
-		    break;
-	    }
+                publishLive("internal/humidity", String::format("%.2f", DHT.getHumidity()));
+                publishLive("internal/temperature", String::format("%.2f", DHT.getCelsius()));
 
-      #ifdef DEBUG_TEMP
-	    Serial.print("Humidity (%): ");
-	    Serial.println(DHT.getHumidity(), 2);
+                break;
+            case DHTLIB_ERROR_CHECKSUM:
+                consoleLog("Error\n\r\tChecksum error");
+                break;
+            case DHTLIB_ERROR_ISR_TIMEOUT:
+                consoleLog("Error\n\r\tISR time out error");
+                break;
+            case DHTLIB_ERROR_RESPONSE_TIMEOUT:
+                consoleLog("Error\n\r\tResponse time out error");
+                break;
+            case DHTLIB_ERROR_DATA_TIMEOUT:
+                consoleLog("Error\n\r\tData time out error");
+                break;
+            case DHTLIB_ERROR_ACQUIRING:
+                consoleLog("Error\n\r\tAcquiring");
+                break;
+            case DHTLIB_ERROR_DELTA:
+                consoleLog("Error\n\r\tDelta time to small");
+                break;
+            case DHTLIB_ERROR_NOTSTARTED:
+                consoleLog("Error\n\r\tNot started:Restarting");
+                break;
+            default:
+                consoleLog("Unknown error");
+                break;
+        }
 
-	    Serial.print("Temperature (oC): ");
-	    Serial.println(DHT.getCelsius(), 2);
+#ifdef DEBUG_TEMP
+        Serial.print("Humidity (%): ");
+        Serial.println(DHT.getHumidity(), 2);
 
-	    Serial.print("Temperature (oF): ");
-	    Serial.println(DHT.getFahrenheit(), 2);
+        Serial.print("Temperature (oC): ");
+        Serial.println(DHT.getCelsius(), 2);
 
-	    Serial.print("Temperature (K): ");
-	    Serial.println(DHT.getKelvin(), 2);
+        Serial.print("Temperature (oF): ");
+        Serial.println(DHT.getFahrenheit(), 2);
 
-	    Serial.print("Dew Point (oC): ");
-	    Serial.println(DHT.getDewPoint());
+        Serial.print("Temperature (K): ");
+        Serial.println(DHT.getKelvin(), 2);
 
-	    Serial.print("Dew Point Slow (oC): ");
-	    Serial.println(DHT.getDewPointSlow());
-      #endif
+        Serial.print("Dew Point (oC): ");
+        Serial.println(DHT.getDewPoint());
 
-	    bDHTstarted = false;  // reset the sample flag so we can take another
-	    // DHTnextSampleTime = millis() + DHT_SAMPLE_INTERVAL;  // set the time for next sample
-	}
-  #endif
+        Serial.print("Dew Point Slow (oC): ");
+        Serial.println(DHT.getDewPointSlow());
+#endif
+
+        bDHTstarted = false;  // reset the sample flag so we can take another
+        // DHTnextSampleTime = millis() + DHT_SAMPLE_INTERVAL;  // set the time for next sample
+    }
+#endif
 
 }
 
-long heart;
-void publishHeartbeat(){
-  // Check if it is heartbeat time
-  if( millis() > nextHeartBeat){                
-      if (heart < ULONG_MAX){
-        heart++;
-      }else{
-        publishLive("heartbeat/rollover","1");
-        heart = 0;
-      }
+long heart=0;
+system_tick_t nextHeartBeat;
 
-      publishLive("heartbeat", String(heart));  
-      nextHeartBeat = millis() + HEARTBEAT_INTERVAL;
-  }
+void publishHeartbeat() {    
+    if (millis() > nextHeartBeat) {
+        if (heart < ULONG_MAX) {
+            heart++;
+        } else {
+            publishLive("heartbeat/rollover", "1");
+            heart = 0;
+        }
+
+        publishLive("heartbeat", String(heart));
+        nextHeartBeat = millis() + HEARTBEAT_INTERVAL;
+    }
 }
 
-void monitorBattery(){
+void monitorBattery() {
     float cellVoltage = batteryMonitor.getVCell();
     float stateOfCharge = batteryMonitor.getSoC();
 
-    publishLive("battery/voltage", String::format("%.2f",cellVoltage));
-    publishLive("battery/soc", String::format("%.2f",stateOfCharge));
+    publishLive("battery/voltage", String::format("%.2f", cellVoltage));
+    publishLive("battery/soc", String::format("%.2f", stateOfCharge));
 }
 
 
-
-
-void togglePowerInput(){
+void togglePowerInput() {
     int currentState = digitalRead(AC_SELECTION);
     digitalWrite(AC_SELECTION, !currentState);
-}      
-
-bool onPrimary = true;
-void checkMainPower(){
-      
-  int powerOn = digitalRead(DC_POWER_GOOD);
-
-  if (onPrimary){
-    if (!powerOn){
-      publishState("power/active", String(powerOn));
-      //togglePowerInput();
-      setPumpStatus(SECONDARY_AC, AC_SELECTION);
-      onPrimary = false;
-    }
-  }else{
-    if (powerOn){
-      publishState("power/active", String(powerOn));
-      // togglePowerInput();
-      setPumpStatus(PRIMARY_AC,AC_SELECTION);
-      onPrimary = true;
-    }
-  }
-
-  
 }
 
-void loop() { 
-  
-    //if (configured) {
 
-      checkMainPower();
-      
-      checkButtons();  
+int lastPowerStatus = -1;
+int lastCircuitStatus = 0;
 
-      publishHeartbeat();
+const int POWER_ON = 0;
+const int POWER_OFF = 1; 
 
-      if( millis() > nextMeasure){
+const int PRIMARY_CIRCUIT = 0;
+const int SECONDARY_CIRCUIT = 1;
+
+system_tick_t lastFailoverTime;
+system_tick_t nextPowerMeasure;
+
+const long FAILOVER_STEADY_STATE = 1000;
+
+int failoversSinceLastPower = 0;
+
+const int MAX_FAILOVERS_WITHOUT_POWER = 3600 / FAILOVER_STEADY_STATE; // 1Hr wirth of failovers
+
+void checkMainPower() {
+    int powerStatus = digitalRead(DC_POWER_GOOD); 
+    int circuitStatus = digitalRead(AC_SELECTION);
+
+    if (millis() > nextPowerMeasure) {        
+        publishLive("power/active", String(circuitStatus));
+        nextPowerMeasure = millis() + 1000; 
+    }
+
+    if (powerStatus == POWER_OFF){                    
+        publishLive("power/failure/", String(circuitStatus));
+
+        failoversSinceLastPower++;       
+        publishLive("power/swaps/", String(failoversSinceLastPower));        
         
-        // Depth Sensor
-        if (DEPTH_SENSING) {
-          publishLiveDepth(getDepth());      
-          reads = 0;
-          rawValue = 0;
+        if (millis() > lastFailoverTime + FAILOVER_STEADY_STATE ){            
+            // swap power
+            int circuitToActivate;
+            switch (circuitStatus){
+                case PRIMARY_CIRCUIT:
+                circuitToActivate = SECONDARY_AC;
+                break;
+                case SECONDARY_CIRCUIT:
+                circuitToActivate = PRIMARY_AC;
+                break;
+            }
+            publishLive("power/failover/", String(circuitToActivate));                            
+            setPumpStatus(circuitToActivate, AC_SELECTION);
+            circuitStatus = circuitToActivate;
+            lastFailoverTime = millis();
         }
+    }
 
-        // Environment Temperature Sensor.
-        externalTemp();
+    // // Log State Change
+    if (powerStatus != lastPowerStatus){
+        publishState("power/dcinput/", String(powerStatus));
+        lastPowerStatus = powerStatus;        
 
-        // Internal Temperature Sensor
-        // internalTemp();        
-
-        // monitorBattery();
-
-        nextMeasure = millis() + 1000; //nextMeasureTime();
-        
-      }else{
-
-        if (DEPTH_SENSING){
-          //build depth average
-          int depthRead =  analogRead(DEPTH_INPUT);
-          rawValue += depthRead;
-          reads++;   
+        if (powerStatus == POWER_ON){
+            failoversSinceLastPower = 0; 
+            publishLive("power/restored/", String(circuitStatus));
+            publishState("power/alarm/", "0");
         }
+    }
+    if (circuitStatus != lastCircuitStatus){
+        publishState("power/active/", String(circuitStatus));
+        lastCircuitStatus = circuitStatus;
+    }
 
-        #ifdef INTERNAL_SENSING_CODE
-        if (INTERNAL_TEMP_SENSING){
-          // ensure DHT temp measure started
-          if (!bDHTstarted) {		// start the sample
-            // Serial.print(": Retrieving information from sensor: ");
-            DHT.acquire();
-            // DHT.acquireAndWait(2000);
-            bDHTstarted = true;
-          }
-        }
-        #endif
-        
-      }    
 
-      // Perform Pump control
-    //}
+    if (failoversSinceLastPower > MAX_FAILOVERS_WITHOUT_POWER){
+        publishState("power/alarm/", "1");
+        publishState("power/alarm/", "0");
+    }
+
+
+    // if (onPrimary) {
+    //     if (!powerOn) {
+    //         publishState("power/active", String(powerOn));
+    //         //togglePowerInput();
+    //         setPumpStatus(SECONDARY_AC, AC_SELECTION);
+    //         onPrimary = false;
+    //     }
+    // } else {
+    //     if (powerOn) {
+    //         publishState("power/active", String(powerOn));
+    //         // togglePowerInput();
+    //         setPumpStatus(PRIMARY_AC, AC_SELECTION);
+    //         onPrimary = true;
+    //     }
+    // }
+}
+
+void loop() {
+
+    //todo watchdog setup
+    
+    // if (configured) { // for some reason this check seems like it is being JIT'd out.. but there is no jit.
+        publishHeartbeat();
+        checkMainPower();        
+    // }
+    // checkButtons(currentStatus);
+    
+
+//     if (millis() > nextMeasure) {
+
+//         // Depth Sensor
+//         if (DEPTH_SENSING) {
+//             publishLiveDepth(getDepth());
+//             reads = 0;
+//             rawValue = 0;
+//         }
+
+//         // Environment Temperature Sensor.
+//         externalTemp();
+
+//         // Internal Temperature Sensor
+//         // internalTemp();        
+
+//         // monitorBattery();
+
+//         nextMeasure = millis() + 1000; //nextMeasureTime();
+
+//     } else {
+
+//         if (DEPTH_SENSING) {
+//             //build depth average
+//             int depthRead = analogRead(DEPTH_INPUT);
+//             rawValue += depthRead;
+//             reads++;
+//         }
+
+// #ifdef INTERNAL_SENSING_CODE
+//         if (INTERNAL_TEMP_SENSING) {
+//             // ensure DHT temp measure started
+//             if (!bDHTstarted) {        // start the sample
+//                 // Serial.print(": Retrieving information from sensor: ");
+//                 DHT.acquire();
+//                 // DHT.acquireAndWait(2000);
+//                 bDHTstarted = true;
+//             }
+//         }
+// #endif
+
+    // }
+
+    // Perform Pump control
+    // }
 
 }
