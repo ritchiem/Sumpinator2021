@@ -25,15 +25,17 @@
 
 char dev_name[32] = "";
 bool configured = false;
-char VERSION[64] = "2.3.0";
+char VERSION[64] = "2.5.0";
 
 /*
+// 2.5.0 - Add Wifi
+// 2.4.0 - Add current 
 // 2.3.0 - skip state model and just make it work. 
          - Re worked power managment.
 // 2.2.0 - move to status based model
 // 2.1.2 Added heartbeat
 // 2.0.2. Add DHT22
-// 2.0 - major update for first integration adding Live MQTT Publish of data, Sensors added : DHT22, Current Sensor
+// 2.0 - major update for first integration adding Live MQTT Publish of data, Sensors added : DHT22, Current Sensor<-- it wasn't coded here
 // 1.0 - Initial version - reading sensor and MQTT publish
 */
 
@@ -44,8 +46,8 @@ char VERSION[64] = "2.3.0";
 #define DHTPIN   D5     // Digital pin for communications
 
 
-const long HEARTBEAT_INTERVAL = 5000;
-const long MAIN_MEASURE_INTERVAL = 1000;
+const unsigned long HEARTBEAT_INTERVAL = 5000;
+const unsigned long MAIN_MEASURE_INTERVAL = 1000;
 
 //Temp Buttons
 const int DC_POWER_GOOD = D6;
@@ -61,6 +63,8 @@ const int PUMP2 = D2;
 const int DHT22_PIN = DHTPIN;
 const int ONE_WIRE_BUS = D1;
 
+const int AC_AMP_PRIMARY_INPUT = A2;
+const int AC_AMP_SECONDARY_INPUT = A1;
 const int DEPTH_INPUT = A0;
 
 bool INTERNAL_TEMP_SENSING = true;
@@ -232,7 +236,9 @@ void deviceNameHandler(const char *topic, const char *data) {
 
 // setup() runs once, when the device is first turned on.
 void setup() {
-    Serial.begin(9600);
+    if (DEBUG_CONSOLE){
+        Serial.begin(9600);
+    }
     consoleLog("Device Startup");
 
     //setup temp buttons    
@@ -250,8 +256,6 @@ void setup() {
     setPumpStatus(PUMP_OFF, PUMP1);
     setPumpStatus(PUMP_OFF, PUMP2);
     setPumpStatus(PRIMARY_AC, AC_SELECTION);
-
-    consoleLog(String::format("Current AC Selection: %d", digitalRead(DC_POWER_GOOD)));
 
     pinMode(DHT22_PIN, INPUT_PULLUP);
 
@@ -488,6 +492,8 @@ void togglePowerInput() {
 }
 
 
+
+
 int lastPowerStatus = -1;
 int lastCircuitStatus = 0;
 
@@ -504,14 +510,26 @@ const long FAILOVER_STEADY_STATE = 1000;
 
 int failoversSinceLastPower = 0;
 
-const int MAX_FAILOVERS_WITHOUT_POWER = 3600 / FAILOVER_STEADY_STATE; // 1Hr wirth of failovers
+const int MAX_FAILOVERS_WITHOUT_POWER = 3600 / FAILOVER_STEADY_STATE; // 1Hr of constant failover before alarm
 
+void publishCircuitStatus(String updateType, int circuitStatus){
+    switch (circuitStatus){
+        case PRIMARY_CIRCUIT:
+            publishMQTT(updateType, "power/active/primary", "1");
+            publishMQTT(updateType, "power/active/secondary", "0");
+        break;
+        case SECONDARY_CIRCUIT:
+            publishMQTT(updateType, "power/active/primary", "0");
+            publishMQTT(updateType, "power/active/secondary", "1");
+        break;
+    }
+}
 void checkMainPower() {
     int powerStatus = digitalRead(DC_POWER_GOOD); 
     int circuitStatus = digitalRead(AC_SELECTION);
 
     if (millis() > nextPowerMeasure) {        
-        publishLive("power/active", String(circuitStatus));
+        publishCircuitStatus(LIVE, circuitStatus);
         nextPowerMeasure = millis() + 1000; 
     }
 
@@ -550,33 +568,61 @@ void checkMainPower() {
             publishState("power/alarm/", "0");
         }
     }
-    if (circuitStatus != lastCircuitStatus){
-        publishState("power/active/", String(circuitStatus));
+    if (circuitStatus != lastCircuitStatus){        
+        publishCircuitStatus(STATE, circuitStatus);
         lastCircuitStatus = circuitStatus;
     }
 
 
     if (failoversSinceLastPower > MAX_FAILOVERS_WITHOUT_POWER){
-        publishState("power/alarm/", "1");
-        publishState("power/alarm/", "0");
+        publishState("power/alarm", "1");        
+    }  
+}
+
+
+// lifted from https://wiki.dfrobot.com/Gravity_Analog_AC_Current_Sensor__SKU_SEN0211_
+#define AC_DETECTION_RANGE 20;    //set Non-invasive AC Current Sensor tection range (5A,10A,20A)
+// VREF: Analog reference
+// For Arduino UNO, Leonardo and mega2560, etc. change VREF to 5
+// For Arduino Zero, Due, MKR Family, ESP32, etc. 3V3 controllers, change VREF to 3.3
+#define VREF 1 //Setting this to 1 looks to give better results on the Particle Xenon.
+
+float readACCurrentValue(int ACPin)
+{
+    float ACCurrtntValue = 0;
+    float peakVoltage = 0;  
+    float voltageVirtualValue = 0;  //Vrms
+    for (int i = 0; i < 5; i++)
+    {
+        peakVoltage += analogRead(ACPin);   //read peak voltage
+        delay(1);
     }
+    peakVoltage = peakVoltage / 5;   
+    voltageVirtualValue = peakVoltage * 0.707;    //change the peak voltage to the Virtual Value of voltage
+
+    /*The circuit is amplified by 2 times, so it is divided by 2.*/
+    voltageVirtualValue = (voltageVirtualValue / 1024 * VREF ) / 2;  
+
+    ACCurrtntValue = voltageVirtualValue * AC_DETECTION_RANGE;
+
+    return ACCurrtntValue;
+}
+
+void monitorACCurrentUsage(){
+    float primaryCurrent = readACCurrentValue(AC_AMP_PRIMARY_INPUT);    
+    consoleLog(String::format("%.2f A",current));
+    publishLive("current/primary", String::format("%.2f",primaryCurrent));
+
+    float secondaryCurrent = readACCurrentValue(AC_AMP_SECONDARY_INPUT); 
+    consoleLog(String::format("%.2f A",secondaryCurrent));        
+    publishLive("current/secondary", String::format("%.2f",secondaryCurrent));
+}
 
 
-    // if (onPrimary) {
-    //     if (!powerOn) {
-    //         publishState("power/active", String(powerOn));
-    //         //togglePowerInput();
-    //         setPumpStatus(SECONDARY_AC, AC_SELECTION);
-    //         onPrimary = false;
-    //     }
-    // } else {
-    //     if (powerOn) {
-    //         publishState("power/active", String(powerOn));
-    //         // togglePowerInput();
-    //         setPumpStatus(PRIMARY_AC, AC_SELECTION);
-    //         onPrimary = true;
-    //     }
-    // }
+void monitorWifiSignal(){
+    WiFiSignal signal = WiFi.RSSI();
+    publishLive("wifi/strength",String::format("%.2f",signal.getStrength()));
+    publishLive("wifi/quality",String::format("%.2f",signal.getQuality()));
 }
 
 void loop() {
@@ -586,8 +632,11 @@ void loop() {
     // if (configured) { // for some reason this check seems like it is being JIT'd out.. but there is no jit.
         publishHeartbeat();
         checkMainPower();        
-    // }
-    // checkButtons(currentStatus);
+
+        // MonitorPowerUsage
+
+
+    // }    
     
     if (millis() > nextMeasure) {
         
@@ -607,6 +656,10 @@ void loop() {
 
         // Internal Temperature Sensor
         internalTemp();        
+
+        monitorACCurrentUsage();
+
+        monitorWifiSignal();
 
         nextMeasure = millis() + MAIN_MEASURE_INTERVAL;        
     } else {
