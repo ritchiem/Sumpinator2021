@@ -25,9 +25,10 @@
 
 char dev_name[32] = "";
 bool configured = false;
-char VERSION[64] = "2.5.0";
+char VERSION[64] = "2.5.1";
 
 /*
+// 2.5.1 - Improved Power Failover signaling to fit HomeAssistant dashboard
 // 2.5.0 - Add Wifi
 // 2.4.0 - Add current 
 // 2.3.0 - skip state model and just make it work. 
@@ -506,40 +507,47 @@ const int SECONDARY_CIRCUIT = 1;
 system_tick_t lastFailoverTime;
 system_tick_t nextPowerMeasure;
 
-const long FAILOVER_STEADY_STATE = 1000;
+const long FAILOVER_STEADY_STATE = 5000;
+const long POWER_REPORTING_PERIOD = 1000;
 
 int failoversSinceLastPower = 0;
 
+const String FAILOVER_SIGNAL = "power/failover";
+const String POWER_ALARM_SIGNAL = "power/alarm";
+
 const int MAX_FAILOVERS_WITHOUT_POWER = 3600 / FAILOVER_STEADY_STATE; // 1Hr of constant failover before alarm
 
-void publishCircuitStatus(String updateType, int circuitStatus){
+void publishCircuitStatus(String updateType, String state, int circuitStatus){
     switch (circuitStatus){
         case PRIMARY_CIRCUIT:
-            publishMQTT(updateType, "power/active/primary", "1");
-            publishMQTT(updateType, "power/active/secondary", "0");
+            publishMQTT(updateType, "power/"+state+"/primary", "1");
+            publishMQTT(updateType, "power/"+state+"/secondary", "0");
         break;
         case SECONDARY_CIRCUIT:
-            publishMQTT(updateType, "power/active/primary", "0");
-            publishMQTT(updateType, "power/active/secondary", "1");
+            publishMQTT(updateType, "power/"+state+"/primary", "0");
+            publishMQTT(updateType, "power/"+state+"/secondary", "1");
         break;
     }
+}
+
+void clearCircuitStatus(String updateType, String state){
+    publishMQTT(updateType, "power/"+state+"/primary", "0");
+    publishMQTT(updateType, "power/"+state+"/secondary", "0");
 }
 void checkMainPower() {
     int powerStatus = digitalRead(DC_POWER_GOOD); 
     int circuitStatus = digitalRead(AC_SELECTION);
 
-    if (millis() > nextPowerMeasure) {        
-        publishCircuitStatus(LIVE, circuitStatus);
-        nextPowerMeasure = millis() + 1000; 
-    }
-
-    if (powerStatus == POWER_OFF){                    
-        publishLive("power/failure/", String(circuitStatus));
-
-        failoversSinceLastPower++;       
-        publishLive("power/swaps/", String(failoversSinceLastPower));        
-        
+    if (powerStatus == POWER_OFF){                           
         if (millis() > lastFailoverTime + FAILOVER_STEADY_STATE ){            
+
+            publishLive(FAILOVER_SIGNAL, "1");
+            clearCircuitStatus(STATE, "active");
+            publishCircuitStatus(LIVE, "failure", circuitStatus);                  
+
+            failoversSinceLastPower++;       
+            publishLive("power/swaps", String(failoversSinceLastPower));        
+
             // swap power
             int circuitToActivate;
             switch (circuitStatus){
@@ -550,33 +558,41 @@ void checkMainPower() {
                 circuitToActivate = PRIMARY_AC;
                 break;
             }
-            publishLive("power/failover/", String(circuitToActivate));                            
+            
             setPumpStatus(circuitToActivate, AC_SELECTION);
             circuitStatus = circuitToActivate;
             lastFailoverTime = millis();
         }
     }
 
-    // // Log State Change
-    if (powerStatus != lastPowerStatus){
-        publishState("power/dcinput/", String(powerStatus));
-        lastPowerStatus = powerStatus;        
-
+    if (millis() > nextPowerMeasure) {        
         if (powerStatus == POWER_ON){
-            failoversSinceLastPower = 0; 
-            publishLive("power/restored/", String(circuitStatus));
-            publishState("power/alarm/", "0");
+            publishCircuitStatus(LIVE, "active", circuitStatus);
+        }        
+
+        // // Log State Change
+        if (powerStatus != lastPowerStatus){
+            publishState("power/dcinput", String(powerStatus));
+            lastPowerStatus = powerStatus;        
+
+            if (powerStatus == POWER_ON){
+                failoversSinceLastPower = 0;        
+                clearCircuitStatus(LIVE, "failure");      
+                publishLive(FAILOVER_SIGNAL, "0");                
+                publishState(POWER_ALARM_SIGNAL, "0");
+            }
         }
-    }
-    if (circuitStatus != lastCircuitStatus){        
-        publishCircuitStatus(STATE, circuitStatus);
-        lastCircuitStatus = circuitStatus;
-    }
+        if (circuitStatus != lastCircuitStatus){        
+            publishCircuitStatus(STATE, "active", circuitStatus);
+            lastCircuitStatus = circuitStatus;
+        }
 
 
-    if (failoversSinceLastPower > MAX_FAILOVERS_WITHOUT_POWER){
-        publishState("power/alarm", "1");        
-    }  
+        if (failoversSinceLastPower > MAX_FAILOVERS_WITHOUT_POWER){
+            publishState(POWER_ALARM_SIGNAL, "1");        
+        }  
+        nextPowerMeasure = millis() + POWER_REPORTING_PERIOD; 
+    }
 }
 
 
