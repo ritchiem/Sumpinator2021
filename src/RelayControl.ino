@@ -25,9 +25,10 @@ SYSTEM_THREAD(ENABLED);
 
 char dev_name[32] = "";
 bool configured = false;
-char VERSION[64] = "2.5.2";
+char VERSION[64] = "2.6.1";
 
 /*
+// 2.6.1 - Correct Soc Output due to conflict with one-wire
 // 2.6.0 - Add Software Watchdog - add System Thread(enabled)
 // 2.5.2 - update failover signals to ensure errors states are cleared, remove checkbuttons
 // 2.5.1 - Improved Power Failover signaling to fit HomeAssistant dashboard
