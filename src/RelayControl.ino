@@ -480,9 +480,10 @@ void publishHeartbeat() {
 void monitorBattery() {
     float cellVoltage = batteryMonitor.getVCell();
     float stateOfCharge = batteryMonitor.getSoC();
+    
 
     publishLive("battery/voltage", String::format("%.2f", cellVoltage));
-    publishLive("battery/soc", String::format("%.2f", stateOfCharge/256.0*100 )); // Range is 1-256 so make it %age
+    publishLive("battery/soc", String::format("%.2f", stateOfCharge ));
 }
 
 
