@@ -25,9 +25,10 @@
 
 char dev_name[32] = "";
 bool configured = false;
-char VERSION[64] = "2.5.1";
+char VERSION[64] = "2.5.2";
 
 /*
+// 2.5.2 - update failover signals to ensure errors states are cleared, remove checkbuttons
 // 2.5.1 - Improved Power Failover signaling to fit HomeAssistant dashboard
 // 2.5.0 - Add Wifi
 // 2.4.0 - Add current 
@@ -44,26 +45,27 @@ char VERSION[64] = "2.5.1";
 #define DHTTYPE DHT22   // DHT 22  (AM2302)
 #endif
 
-#define DHTPIN   D5     // Digital pin for communications
-
-
 const unsigned long HEARTBEAT_INTERVAL = 5000;
 const unsigned long MAIN_MEASURE_INTERVAL = 1000;
 
 //Temp Buttons
-const int DC_POWER_GOOD = D6;
-const int BUT2 = A4;
-const int ABUT2 = A2;
-const int ABUT3 = A3;
+// const int BUT2 = A4;
+// const int ABUT2 = A2;
+// const int ABUT3 = A3;
 
 // PIN ASSIGNMENT
+
+const int DC_POWER_GOOD = D6;
+#define DHTPIN   D5     // Digital pin for communications
+const int DHT22_PIN = DHTPIN;
 const int AC_SELECTION = D4;
 const int PUMP1 = D3;
 const int PUMP2 = D2;
+//D1  iC2 bus for Battery Monitor 
+//D0 
 
-const int DHT22_PIN = DHTPIN;
-const int ONE_WIRE_BUS = D1;
 
+const int ONE_WIRE_BUS = A3;
 const int AC_AMP_PRIMARY_INPUT = A2;
 const int AC_AMP_SECONDARY_INPUT = A1;
 const int DEPTH_INPUT = A0;
@@ -121,17 +123,10 @@ void checkButton(String name, int button, int pump) {
     }
 }
 
-void checkButtons() {
-    checkButton("2", BUT2, PUMP2);
-    checkButton("A2", ABUT2, PUMP1);
-    // checkButton("A3", ABUT3, AC_SELECTION);
-    // checkButton("DC_Power", DC_POWER_GOOD, AC_SELECTION);
-}
-
-
 // OneWire oneWire(ONE_WIRE_BUS);  // Setup a oneWire instance to communicate with any OneWire devices 
 // DallasTemperature sensors(&oneWire);  // Pass our oneWire reference to Dallas Temperature.
 DS18 sensor(ONE_WIRE_BUS);
+#define TEMPERATURE_PRECISION 12
 uint8_t water_temp_addr[8];
 
 // DEPTH SENSING
@@ -243,10 +238,10 @@ void setup() {
     consoleLog("Device Startup");
 
     //setup temp buttons    
-    pinMode(ABUT2, INPUT_PULLDOWN);
-    pinMode(ABUT3, INPUT_PULLDOWN);
+    // pinMode(ABUT2, INPUT_PULLDOWN);
+    // pinMode(ABUT3, INPUT_PULLDOWN);
 
-    pinMode(BUT2, INPUT_PULLDOWN);
+    // pinMode(BUT2, INPUT_PULLDOWN);
 
     pinMode(DC_POWER_GOOD, INPUT_PULLUP);    
 
@@ -260,8 +255,7 @@ void setup() {
 
     pinMode(DHT22_PIN, INPUT_PULLUP);
 
-    // Setup Temp Sensing
-    // sensors.being();  
+    // Setup Temp Sensing     
 #ifdef INTERNAL_SENSING_CODE
     if (INTERNAL_TEMP_SENSING) {
         DHT.begin();
@@ -493,8 +487,6 @@ void togglePowerInput() {
 }
 
 
-
-
 int lastPowerStatus = -1;
 int lastCircuitStatus = 0;
 
@@ -539,7 +531,7 @@ void checkMainPower() {
     int circuitStatus = digitalRead(AC_SELECTION);
 
     if (powerStatus == POWER_OFF){                           
-        if (millis() > lastFailoverTime + FAILOVER_STEADY_STATE ){            
+        if (millis() > lastFailoverTime + FAILOVER_STEADY_STATE ){   // todo this should be extracted and use failoversSinceLastPower to backoff       
 
             publishLive(FAILOVER_SIGNAL, "1");
             clearCircuitStatus(STATE, "active");
@@ -568,29 +560,30 @@ void checkMainPower() {
     if (millis() > nextPowerMeasure) {        
         if (powerStatus == POWER_ON){
             publishCircuitStatus(LIVE, "active", circuitStatus);
+            publishCircuitStatus(STATE, "active", circuitStatus); // not sure we need both ..state should be a persistent publish
+            publishState("power/dcinput", String(powerStatus));
+
+            //reset any failover state
+            failoversSinceLastPower = 0;        
+            clearCircuitStatus(LIVE, "failure");      
+            publishLive(FAILOVER_SIGNAL, "0");                
+            publishState(POWER_ALARM_SIGNAL, "0");            
         }        
 
         // // Log State Change
         if (powerStatus != lastPowerStatus){
-            publishState("power/dcinput", String(powerStatus));
-            lastPowerStatus = powerStatus;        
-
-            if (powerStatus == POWER_ON){
-                failoversSinceLastPower = 0;        
-                clearCircuitStatus(LIVE, "failure");      
-                publishLive(FAILOVER_SIGNAL, "0");                
-                publishState(POWER_ALARM_SIGNAL, "0");
-            }
+            
+            lastPowerStatus = powerStatus;           
         }
+
         if (circuitStatus != lastCircuitStatus){        
-            publishCircuitStatus(STATE, "active", circuitStatus);
             lastCircuitStatus = circuitStatus;
         }
-
 
         if (failoversSinceLastPower > MAX_FAILOVERS_WITHOUT_POWER){
             publishState(POWER_ALARM_SIGNAL, "1");        
         }  
+
         nextPowerMeasure = millis() + POWER_REPORTING_PERIOD; 
     }
 }
