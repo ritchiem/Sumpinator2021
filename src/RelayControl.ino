@@ -1,4 +1,4 @@
-//SYSTEM_THREAD(ENABLED);
+SYSTEM_THREAD(ENABLED);
 
 #define INTERNAL_SENSING_CODE
 
@@ -28,6 +28,7 @@ bool configured = false;
 char VERSION[64] = "2.5.2";
 
 /*
+// 2.6.0 - Add Software Watchdog - add System Thread(enabled)
 // 2.5.2 - update failover signals to ensure errors states are cleared, remove checkbuttons
 // 2.5.1 - Improved Power Failover signaling to fit HomeAssistant dashboard
 // 2.5.0 - Add Wifi
@@ -78,6 +79,7 @@ bool DEPTH_SENSING = true;
 void dht_wrapper();                 // must be declared before the lib initialization
 PietteTech_DHT DHT(DHTPIN, DHTTYPE, dht_wrapper);
 
+// this shouldn't be needed now
 void dht_wrapper() {
     DHT.isrCallback();
 }
@@ -86,6 +88,7 @@ void dht_wrapper() {
 
 PowerShield batteryMonitor;
 
+ApplicationWatchdog *wd;
 
 void consoleLog(String out) {
     if (DEBUG_CONSOLE) {
@@ -237,7 +240,9 @@ void setup() {
     }
     consoleLog("Device Startup");
 
-    //setup temp buttons    
+
+    wd = new ApplicationWatchdog(5min, System.reset);
+    
     // pinMode(ABUT2, INPUT_PULLDOWN);
     // pinMode(ABUT3, INPUT_PULLDOWN);
 
@@ -634,6 +639,11 @@ void monitorWifiSignal(){
     publishLive("wifi/quality",String::format("%.2f",signal.getQuality()));
 }
 
+
+void monitorSystem(){
+    publishLive("system/memory",String::format("%d",System.freeMemory()));    
+}
+
 void loop() {
 
     //todo watchdog setup
@@ -669,6 +679,8 @@ void loop() {
         monitorACCurrentUsage();
 
         monitorWifiSignal();
+
+        monitorSystem();
 
         nextMeasure = millis() + MAIN_MEASURE_INTERVAL;        
     } else {
