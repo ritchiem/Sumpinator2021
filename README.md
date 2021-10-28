@@ -1,8 +1,53 @@
-# RelayControl
+# Sumpinator 2021
 
-A Particle project named RelayControl
+I was frustrated with multiple instances where our external weeping tile sump pump system failed. The builder, electrician and plumber all suggested that we simply have one sump pump and that will be a reliable solution.
 
-## Welcome to your project!
+We opted to have two power circuits and two pumps so we had redundency but no one could advise us on a way to fully utilise them. i.e.
+ * Alternate active pump to spread wear
+
+
+Given we had 3 basement floods prior to finishing the basement this seemed like a poor solution.
+
+The cause of the floodings were:
+ * **Human Error** : Worker turned the power off!!
+ * **Nature** : Lots of rain and GFCI tripoed.
+ * **Mechanical Failure** : Float sensors jammed in pit and didn't activate.
+
+So the 'only' solution was clearly to go to 11 on the problem. A control system that can:
+ * Failover between the two power circuits
+ * Monitor water depth
+ * Monitor pump action
+ * Alternate active pump
+ * Fail safe... as in, if the control breaks then we have the same level of function as if the control system wasn't there.
+
+This is still a WIP as the actual hardware has just been installed and monitoring is ongoing before full control is taken over by ths system.
+
+## Goals
+
+This 'box of tricks' is to serve anumber of purposes.
+
+* Monitor the running of the pumps. So we can tell:
+  * How frequently they operate.
+  * Did the actually operate as expected.. has the pump failed and so needs replaced.
+  * Montior the AC current usage to perhaps early detect failure or other operational issue.
+  * Alternate the active pump. There are 2 in the pit and only using 1 will result in uneaven wear.
+* There are two power circuites to the sump pit. If the RCD/GFCI trips for one circuit attempt to swap to use the other. 
+
+## Still to come
+
+### System design
+
+Diagrams.. and diagrams :)
+
+### Eagle Schematics for the hardware
+
+### Home Automation configuration setup
+
+### Actual Sump Pump controls
+Configuration to set high and low water points once we measure what the current sensor reads for the manual floats
+
+
+## Welcome to your Particle project!
 
 Every new Particle project is composed of 3 important elements that you'll see have been created in your project directory for RelayControl.
 
