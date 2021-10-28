@@ -1,6 +1,10 @@
-SYSTEM_THREAD(ENABLED);
 
 #define INTERNAL_SENSING_CODE
+
+#include "Particle.h"
+
+SYSTEM_THREAD(ENABLED);
+STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 #include <MQTT.h>
 #include "OneWire.h"
@@ -25,9 +29,13 @@ SYSTEM_THREAD(ENABLED);
 
 char dev_name[32] = "";
 bool configured = false;
-char VERSION[64] = "2.6.1";
+char VERSION[64] = "2.7.3";
 
 /*
+// 2.7.3 - Cleaned up code added Particle.Publish of heartbeet to aid in understanding if device is working.
+// 2.7.2 - improve heartbeat for Home Assistant display 0/1 alternate
+// 2.7.1 - message power/%s/{primary|secondary} was being truncated by 3 chars. So gave up debug and went for [32] as that is much larger than needed.
+// 2.7.0 - Remove String usage as everyone says it is bad for memory and may cause lock ups.
 // 2.6.1 - Correct Soc Output due to conflict with one-wire
 // 2.6.0 - Add Software Watchdog - add System Thread(enabled)
 // 2.5.2 - update failover signals to ensure errors states are cleared, remove checkbuttons
@@ -48,7 +56,9 @@ char VERSION[64] = "2.6.1";
 #endif
 
 const unsigned long HEARTBEAT_INTERVAL = 5000;
+const unsigned long DEPTH_MEASURE_INTERVAL = 1000;
 const unsigned long MAIN_MEASURE_INTERVAL = 1000;
+const unsigned long PARTICLE_UPDATE_INTERVAL = 5 * 60 * 1000;  // 5 minutes
 
 //Temp Buttons
 // const int BUT2 = A4;
@@ -75,6 +85,8 @@ const int DEPTH_INPUT = A0;
 bool INTERNAL_TEMP_SENSING = true;
 bool DEPTH_SENSING = true;
 
+retained long resetCounter = 0;
+
 #ifdef INTERNAL_SENSING_CODE
 
 void dht_wrapper();                 // must be declared before the lib initialization
@@ -91,7 +103,7 @@ PowerShield batteryMonitor;
 
 ApplicationWatchdog *wd;
 
-void consoleLog(String out) {
+void consoleLog(const char* out) {
     if (DEBUG_CONSOLE) {
         Serial.println(out);
     }
@@ -108,25 +120,7 @@ void setPumpStatus(int value, int pump) {
     digitalWrite(pump, value);
 }
 
-void checkButton(String name, int button, int pump) {
-
-    int buttonStatus = digitalRead(button);
-
-    if (buttonStatus) {
-        if (digitalRead(pump) == PUMP_OFF) {
-            publishState("button/" + name, "1");
-        }
-        setPumpStatus(PUMP_ON, pump);
-    } else {
-
-        if (digitalRead(pump) == PUMP_ON) {
-            publishState("button/" + name, "0");
-        }
-
-        setPumpStatus(PUMP_OFF, pump);
-    }
-}
-
+//todo can probably remove these onewire and dallastemp libs.
 // OneWire oneWire(ONE_WIRE_BUS);  // Setup a oneWire instance to communicate with any OneWire devices 
 // DallasTemperature sensors(&oneWire);  // Pass our oneWire reference to Dallas Temperature.
 DS18 sensor(ONE_WIRE_BUS);
@@ -167,33 +161,30 @@ float readAnaloguePin(int INPUT_PIN) {
 
 void callback(char *topic, byte *payload, unsigned int length);
 
-MQTT client("10.10.10.59", 1883, callback);
+MQTT client("10.10.10.59", 1883, callback); //think to fix this warning we need to create a const char* for String assignemnt and copy it in to the a char* for the API. :(
 
 void callback(char *topic, byte *payload, unsigned int length) {
-    char p[length + 1];
-    memcpy(p, payload, length);
-    p[length] = NULL;
-    consoleLog(String::format("received %s", p));
+    // We don't need this call back for until we support mqtt subscription i.e. remote testing of system.
+
+    // char p[length + 1];
+    // memcpy(p, payload, length);
+    // p[length] = NULL;   
+
+    // char message[length+10];
+    // snprintf(message, sizeof(message), "received %s", p);
+    // consoleLog(message);
 }
 
 
 void clientConnect() {
-    consoleLog(String::format("Connecting as %s.", dev_name));
+    char message[sizeof(dev_name)+16];
+    snprintf(message, sizeof(message), "Connecting as %s.", dev_name);
+    consoleLog(message);
     client.connect(dev_name, "particle", "device");
 }
 
-// const int BUTTON_PIN = D1;
-// const int SWITCH_PIN = D0;
-
 void configureDevice() {
-
-    String device_name = "unknown";
-
-    if (strcmp("zombie_lazer", dev_name) == 0) {
-        //device_name = "zombie_lazer";
-        // strlcpy(auth, "A7QWTTz27Zly-vWq9_Rnfry242Bx996Y",32); // <-- Sump Pump -- for Blynk
-    }
-
+    //todo convert to char[]
     String json = "{ \"device_name\" : \"" + String::format("%s", dev_name) + "\""
                   // + ",\"dev_name\" : \"" + String(dev_name) + "\""
                   // + ",\"device_name_check\" : \"" + strcmp("zombie_laser", dev_name) + "\""
@@ -206,25 +197,16 @@ void configureDevice() {
                   // + ",\"batteryPublishModifier\" : " + String(batteryPublishRate)
                   // + ",\"sensorPublishFrequency\" : " + String(SAMPLE_INTERVAL)
                   + " }";
-
-    // this is not good this will corrupt the subscribe as it shares buffer... but we've copied the data by this point so we're good
+    
     Particle.publish("Sump Pump Control:", json, 60, PRIVATE);
     Particle.variable("config", json.c_str(), STRING);
     // Not sure why passing the String in directly doesn't work but I was getting jibberish out of the API.
 
     clientConnect();
 
-
     configured = true;
     publishState("version", VERSION);
-    publishState("config", json);
-    
-
-    // // Connect here so we're good... hopefully.
-    // if (!Blynk.connected()) {
-    //   Blynk.connect();
-    // }
-
+    publishState("config", json.c_str());
 }
 
 void deviceNameHandler(const char *topic, const char *data) {
@@ -233,6 +215,11 @@ void deviceNameHandler(const char *topic, const char *data) {
     Particle.unsubscribe();  // Note this will unsubscribe all handlers. Currently we only have one so no biggie.
 }
 
+void mayday() {
+    // potentially update some retain value.
+   resetCounter++;
+   System.reset();
+}
 
 // setup() runs once, when the device is first turned on.
 void setup() {
@@ -242,7 +229,7 @@ void setup() {
     consoleLog("Device Startup");
 
 
-    wd = new ApplicationWatchdog(5min, System.reset);
+    wd = new ApplicationWatchdog(5min, mayday);
     
     // pinMode(ABUT2, INPUT_PULLDOWN);
     // pinMode(ABUT3, INPUT_PULLDOWN);
@@ -291,21 +278,27 @@ void setup() {
 }
 
 // MQTT Signal Names
-const String DEPTH_SIGNAL = "depth";
-const String CURRENT_SIGNAL = "current";
-const String PUMP_SIGNAL = "pump";
-const String TEMPERATURE_SIGNAL = "temperature";
-const String HUMIDITY_SIGNAL = "humidity";
+const char* DEPTH_SIGNAL = "depth";
+const char* CURRENT_SIGNAL = "current";
+const char* PUMP_SIGNAL = "pump";
+const char* TEMPERATURE_SIGNAL = "temperature";
+const char* HUMIDITY_SIGNAL = "humidity";
 
 //todo enum update types.. shared library with other clients
-const String LIVE = "live";
-//const String UPDATE= "update";
-const String STATE = "state";
+const char* LIVE = "live";
+//const char* UPDATE= "update";
+const char* STATE = "state";
 
-void publishMQTT(String updateType, String signal, String value) {
-
-    String source = String(dev_name) + "/" + updateType + "/" + signal;
-    consoleLog(updateType + ":" + source + "=" + value);
+void publishMQTT(const char* updateType, const char* signal, const char* value) {
+    
+    char message[ sizeof(dev_name) + sizeof(updateType) + sizeof(signal) + 6];
+    snprintf(message, sizeof(message), "%s/%s/%s",dev_name, updateType, signal);
+    
+    if (DEBUG_CONSOLE) {
+        char consoleLogMessage[sizeof(message)+ sizeof(value) + 4];
+        snprintf(consoleLogMessage, sizeof(consoleLogMessage), "%s = %s", message, value);    
+        consoleLog(consoleLogMessage);
+    }
 
     if (!configured) {
         consoleLog("no MQTT, not yet configured.");
@@ -318,34 +311,69 @@ void publishMQTT(String updateType, String signal, String value) {
     }
 
     if (client.isConnected()) {
-
-        // What is this doing to munge the String
-        // String::format("%s/%s/%s",dev_name, updateType, signal);
-        client.publish(source, value);
+        client.publish(message, value);
     }
     //todo
     //else Record Client metrics
 }
 
-void publishLive(String signal, String value) {
+// todo would be nice to extract format copy and use a generic type for value
 
+void publishLive(const char* signal, unsigned long value){
+    const char* format = "%u";
+
+    char message[sizeof(format) + sizeof(value) +1];
+    snprintf(message, sizeof(message), format, value);
+
+    publishMQTT(LIVE, signal, message);
+}
+
+void publishLive(const char* signal, long value){
+    const char* format = "%d";
+
+    char message[sizeof(format) + sizeof(value) +1];
+    snprintf(message, sizeof(message), format, value);
+
+    publishMQTT(LIVE, signal, message);
+}
+
+void publishLive(const char* signal, float value) {
+    const char* format = "%.2f";
+
+    char message[sizeof(format) + sizeof(value) +1];
+    snprintf(message, sizeof(message), format, value);
+
+    publishMQTT(LIVE, signal, message);
+}
+
+
+
+void publishLive(const char* signal, const char* value) {
     publishMQTT(LIVE, signal, value);
 }
 
-void publishState(String signal, String value) {
+void publishState(const char* signal, long value){
+    const char* format = "%d";
+
+    char message[sizeof(format) + sizeof(value) +1];
+    snprintf(message, sizeof(message), format, value);
+
+    publishMQTT(STATE, signal, message);
+}
+
+void publishState(const char* signal, const char* value) {
     publishMQTT(STATE, signal, value);
 }
 
-void publishLiveDepth(float depth) {
-    publishLive(DEPTH_SIGNAL, String::format("%.2f", depth));
-}
+const char* PRIMARY = "primary";
+const char* SECONDARY = "secondary";
 
-const String PRIMARY = "primary";
-const String SECONDARY = "secondary";
+void publishCurrent(const char* circuit, float current) {
 
-void publishCurrent(String circuit, float current) {
-    // zombie_laser/live/primary/current/
-    publishLive(circuit + "/" + CURRENT_SIGNAL, String::format("%.2f", current));
+    char message[sizeof(circuit) + sizeof(CURRENT_SIGNAL) +2];
+    snprintf(message, sizeof(message), "%s/%s", circuit, CURRENT_SIGNAL);
+
+    publishLive(message, current);
 }
 
 int buttonStatus = false;
@@ -360,14 +388,14 @@ float current;  //unit:mA
 #define PRINT_INTERVAL 1000
 #define RANGE 5000.0 // Depth measuring range 5000mm (for water)
 
-int reads = 0;
-int rawValue = 0;
 unsigned long nextMeasure = 0;
 
 const float ZERO_ADJUST = 565.0; //0.4 - Voltage.
 const float SIGNAL_VOLTAGE_MAX = 3.27;
 const float SIGNAL_RANGE_MAX = 4096.0 - ZERO_ADJUST;
 
+int reads = 0;
+int rawValue = 0;
 float getDepth() {
     float averageValue = (float) rawValue / (float) reads - ZERO_ADJUST;
     float voltage = (float) averageValue * (SIGNAL_VOLTAGE_MAX / SIGNAL_RANGE_MAX);
@@ -375,18 +403,44 @@ float getDepth() {
     // Raw Value 557629 : count 1000 : average: 557.63, Voltage: 0.45, Depth: -15.02
     // Raw Value 645461 : count 1000 : average: 80.46, Voltage: 0.07, Depth: 113.94 // After sometime values fluxates .07-.08V
     float depth = voltage / SIGNAL_VOLTAGE_MAX * RANGE;
-
-    //consoleLog(String::format("Raw Value %d : count %d : average: %.2f, Voltage: %.2f, Depth: %.2f",rawValue, reads, averageValue, voltage, depth));
+    
     return depth;
+}
+
+unsigned long nextDepthMeasure;
+void monitorDepthSensor(){
+    if (DEPTH_SENSING) {
+        if (millis() > nextDepthMeasure) {                    
+            publishLive(DEPTH_SIGNAL, getDepth());            
+            reads = 0;
+            rawValue = 0;
+
+            nextDepthMeasure = millis() + DEPTH_MEASURE_INTERVAL;
+        } else {
+            //build depth average
+            int depthRead = analogRead(DEPTH_INPUT);
+            rawValue += depthRead;
+            reads++;
+        }   
+    } 
 }
 
 void externalTemp() {
     if (sensor.read(water_temp_addr)) {
-        float tempc = sensor.celsius();
-        consoleLog(String::format("Temp: %.2fC", tempc));
-        publishLive(TEMPERATURE_SIGNAL, String::format("%.2f", tempc));
+        float tempc = sensor.celsius();        
+        publishLive(TEMPERATURE_SIGNAL,  tempc);
     }
 }
+
+
+void publishLiveInternal(const char * type, float value){    
+    char message[10+sizeof(type)];
+    snprintf(message, sizeof(message), "internal/%s", type);
+
+    publishLive(message, value);
+}
+
+
 
 bool bDHTstarted = false;                        // flag to indicate we started acquisition
 void internalTemp() {
@@ -403,9 +457,9 @@ void internalTemp() {
         switch (result) {
             case DHTLIB_OK:
                 consoleLog("OK");
-
-                publishLive("internal/"+HUMIDITY_SIGNAL, String::format("%.2f", DHT.getHumidity()));
-                publishLive("internal/"+TEMPERATURE_SIGNAL, String::format("%.2f", DHT.getCelsius()));
+                
+                publishLiveInternal(HUMIDITY_SIGNAL, DHT.getHumidity());                
+                publishLiveInternal(TEMPERATURE_SIGNAL, DHT.getCelsius());                
 
                 break;
             case DHTLIB_ERROR_CHECKSUM:
@@ -461,7 +515,7 @@ void internalTemp() {
 
 }
 
-long heart=0;
+unsigned long heart = 0;
 system_tick_t nextHeartBeat;
 
 void publishHeartbeat() {    
@@ -473,7 +527,9 @@ void publishHeartbeat() {
             heart = 0;
         }
 
-        publishLive("heartbeat", String(heart));
+        publishLive("heartbeat", heart);        
+        publishLive("heartbeat/pulse", heart % 2);
+        
         nextHeartBeat = millis() + HEARTBEAT_INTERVAL;
     }
 }
@@ -481,10 +537,10 @@ void publishHeartbeat() {
 void monitorBattery() {
     float cellVoltage = batteryMonitor.getVCell();
     float stateOfCharge = batteryMonitor.getSoC();
-    
 
-    publishLive("battery/voltage", String::format("%.2f", cellVoltage));
-    publishLive("battery/soc", String::format("%.2f", stateOfCharge ));
+
+    publishLive("battery/voltage", cellVoltage);
+    publishLive("battery/soc", stateOfCharge);
 }
 
 
@@ -509,30 +565,51 @@ system_tick_t nextPowerMeasure;
 const long FAILOVER_STEADY_STATE = 5000;
 const long POWER_REPORTING_PERIOD = 1000;
 
-int failoversSinceLastPower = 0;
+long failoversSinceLastPower = 0;
 
-const String FAILOVER_SIGNAL = "power/failover";
-const String POWER_ALARM_SIGNAL = "power/alarm";
+const char* FAILOVER_SIGNAL = "power/failover";
+const char* POWER_ALARM_SIGNAL = "power/alarm";
 
 const int MAX_FAILOVERS_WITHOUT_POWER = 3600 / FAILOVER_STEADY_STATE; // 1Hr of constant failover before alarm
 
-void publishCircuitStatus(String updateType, String state, int circuitStatus){
+void publishCircuitStatus(const char* updateType, const char* state, int circuitStatus){
+
+    const char* primaryPattern = "power/%s/primary";
+    char primaryMessage[32];    
+    snprintf(primaryMessage, sizeof(primaryMessage), primaryPattern, state);
+
+    const char* secondaryPattern = "power/%s/secondary";    
+    char secondaryMessage[32];
+    snprintf(secondaryMessage, sizeof(secondaryMessage), secondaryPattern, state);
+
     switch (circuitStatus){
         case PRIMARY_CIRCUIT:
-            publishMQTT(updateType, "power/"+state+"/primary", "1");
-            publishMQTT(updateType, "power/"+state+"/secondary", "0");
+            publishMQTT(updateType, primaryMessage, "1");
+            publishMQTT(updateType, secondaryMessage, "0");
         break;
         case SECONDARY_CIRCUIT:
-            publishMQTT(updateType, "power/"+state+"/primary", "0");
-            publishMQTT(updateType, "power/"+state+"/secondary", "1");
+            publishMQTT(updateType, primaryMessage, "0");
+            publishMQTT(updateType, secondaryMessage, "1");
         break;
     }
 }
 
-void clearCircuitStatus(String updateType, String state){
-    publishMQTT(updateType, "power/"+state+"/primary", "0");
-    publishMQTT(updateType, "power/"+state+"/secondary", "0");
+void clearCircuitStatus(const char* updateType, const char* state){
+    const char* primaryPattern = "power/%s/primary";
+    //char primaryMessage[sizeof(state)+ sizeof(primaryPattern)+ 1];
+    char primaryMessage[32];
+    snprintf(primaryMessage, sizeof(primaryMessage), primaryPattern, state);
+
+
+    const char* secondaryPattern = "power/%s/secondary";
+    //char secondaryMessage[sizeof(state)+ sizeof(secondaryPattern)+ 1];
+    char secondaryMessage[32];
+    snprintf(secondaryMessage, sizeof(secondaryMessage), secondaryPattern, state);
+
+    publishMQTT(updateType, primaryMessage, "0");
+    publishMQTT(updateType, secondaryMessage, "0");
 }
+
 void checkMainPower() {
     int powerStatus = digitalRead(DC_POWER_GOOD); 
     int circuitStatus = digitalRead(AC_SELECTION);
@@ -545,7 +622,7 @@ void checkMainPower() {
             publishCircuitStatus(LIVE, "failure", circuitStatus);                  
 
             failoversSinceLastPower++;       
-            publishLive("power/swaps", String(failoversSinceLastPower));        
+            publishLive("power/swaps", failoversSinceLastPower);        
 
             // swap power
             int circuitToActivate;
@@ -553,6 +630,7 @@ void checkMainPower() {
                 case PRIMARY_CIRCUIT:
                 circuitToActivate = SECONDARY_AC;
                 break;
+                default: // default swap to secondary
                 case SECONDARY_CIRCUIT:
                 circuitToActivate = PRIMARY_AC;
                 break;
@@ -568,7 +646,7 @@ void checkMainPower() {
         if (powerStatus == POWER_ON){
             publishCircuitStatus(LIVE, "active", circuitStatus);
             publishCircuitStatus(STATE, "active", circuitStatus); // not sure we need both ..state should be a persistent publish
-            publishState("power/dcinput", String(powerStatus));
+            publishState("power/dcinput", powerStatus);
 
             //reset any failover state
             failoversSinceLastPower = 0;        
@@ -625,75 +703,64 @@ float readACCurrentValue(int ACPin)
 }
 
 void monitorACCurrentUsage(){
-    float primaryCurrent = readACCurrentValue(AC_AMP_PRIMARY_INPUT);    
-    consoleLog(String::format("%.2f A",current));
-    publishLive("current/primary", String::format("%.2f",primaryCurrent));
+    float primaryCurrent = readACCurrentValue(AC_AMP_PRIMARY_INPUT);       
+    publishLive("current/primary", primaryCurrent);
 
     float secondaryCurrent = readACCurrentValue(AC_AMP_SECONDARY_INPUT); 
-    consoleLog(String::format("%.2f A",secondaryCurrent));        
-    publishLive("current/secondary", String::format("%.2f",secondaryCurrent));
+    publishLive("current/secondary", secondaryCurrent);
 }
 
 
 void monitorWifiSignal(){
     WiFiSignal signal = WiFi.RSSI();
-    publishLive("wifi/strength",String::format("%.2f",signal.getStrength()));
-    publishLive("wifi/quality",String::format("%.2f",signal.getQuality()));
+    publishLive("wifi/strength", signal.getStrength());
+    publishLive("wifi/quality", signal.getQuality());
 }
 
 
 void monitorSystem(){
-    publishLive("system/memory",String::format("%d",System.freeMemory()));    
+    publishLive("system/memory", System.freeMemory());    
+    publishLive("system/resetcounter", resetCounter);    
+}
+
+system_tick_t nextParticleUpdate;
+
+void updateParticle(){
+    if (millis() > nextParticleUpdate) {
+
+        if (Particle.connected){
+            char pulse[12];
+            snprintf(pulse, sizeof(pulse), "%lu", heart);
+
+            Particle.publish("heartbeat/pulse", pulse);
+        }   
+        
+        nextParticleUpdate = millis() + PARTICLE_UPDATE_INTERVAL;
+    }
 }
 
 void loop() {
+   
+    publishHeartbeat();    
+    checkMainPower(); 
+    monitorDepthSensor();
 
-    //todo watchdog setup
-    
-    // if (configured) { // for some reason this check seems like it is being JIT'd out.. but there is no jit.
-        publishHeartbeat();
-        checkMainPower();        
-
-        // MonitorPowerUsage
-
-
-    // }    
-    
     if (millis() > nextMeasure) {
-        
-        // Depth Sensor
-        if (DEPTH_SENSING) {
-            publishLiveDepth(getDepth());
-            reads = 0;
-            rawValue = 0;
-        }
-
         // todo One-wire bus reading seems actually introduce a delay as this didn't loop un checked when the nextMeasure wasn't defined.   
         // might have been due to internal temp sensing without the .acquire() setup off measure cycle.
-        // Environment Temperature Sensor. 
+        
+        // Environment Monitoring
         externalTemp();
-
-        monitorBattery();
-
-        // Internal Temperature Sensor
-        internalTemp();        
-
         monitorACCurrentUsage();
 
+        // System Monitoring
+        internalTemp();        
         monitorWifiSignal();
-
         monitorSystem();
+        monitorBattery();
 
         nextMeasure = millis() + MAIN_MEASURE_INTERVAL;        
     } else {
-
-        if (DEPTH_SENSING) {
-            //build depth average
-            int depthRead = analogRead(DEPTH_INPUT);
-            rawValue += depthRead;
-            reads++;
-        }
-
 #ifdef INTERNAL_SENSING_CODE
         if (INTERNAL_TEMP_SENSING) {
             // ensure DHT temp measure started
@@ -709,6 +776,8 @@ void loop() {
     }
 
     // Perform Pump control
-    // }
 
+
+
+    updateParticle();
 }
