@@ -11,21 +11,20 @@ STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 #include <spark-dallas-temperature.h>
 #include <DS18.h>
 
+// This package is 'said' to leak memory..
 #ifdef INTERNAL_SENSING_CODE
-
 #include <PietteTech_DHT/PietteTech_DHT.h>
-
 #endif
 
 #include <PowerShield.h>
 
 /*
- * Project RelayControl
- * Description: Adding Water depth sensor.
- * Author:
- * Date:
+ * Project Sumpinator 2021
+ * Description: 
+ * Author: 
+ * Date: 2021
  */
-#define DEBUG_CONSOLE true
+#define DEBUG_CONSOLE false
 
 char dev_name[32] = "";
 bool configured = false;
@@ -60,13 +59,7 @@ const unsigned long DEPTH_MEASURE_INTERVAL = 1000;
 const unsigned long MAIN_MEASURE_INTERVAL = 1000;
 const unsigned long PARTICLE_UPDATE_INTERVAL = 5 * 60 * 1000;  // 5 minutes
 
-//Temp Buttons
-// const int BUT2 = A4;
-// const int ABUT2 = A2;
-// const int ABUT3 = A3;
-
 // PIN ASSIGNMENT
-
 const int DC_POWER_GOOD = D6;
 #define DHTPIN   D5     // Digital pin for communications
 const int DHT22_PIN = DHTPIN;
@@ -74,8 +67,7 @@ const int AC_SELECTION = D4;
 const int PUMP1 = D3;
 const int PUMP2 = D2;
 //D1  iC2 bus for Battery Monitor 
-//D0 
-
+//D0  used by Fuel Gauge IC2
 
 const int ONE_WIRE_BUS = A3;
 const int AC_AMP_PRIMARY_INPUT = A2;
@@ -85,10 +77,11 @@ const int DEPTH_INPUT = A0;
 bool INTERNAL_TEMP_SENSING = true;
 bool DEPTH_SENSING = true;
 
-retained long resetCounter = 0;
+retained long resetCounter = 0; // retained stores in SRAM so survives reset. requires above STARTUP() command to enable.
 
 #ifdef INTERNAL_SENSING_CODE
 
+//todo test removing wrapper apparently it isn't needed now.
 void dht_wrapper();                 // must be declared before the lib initialization
 PietteTech_DHT DHT(DHTPIN, DHTTYPE, dht_wrapper);
 
@@ -96,7 +89,6 @@ PietteTech_DHT DHT(DHTPIN, DHTTYPE, dht_wrapper);
 void dht_wrapper() {
     DHT.isrCallback();
 }
-
 #endif
 
 PowerShield batteryMonitor;
@@ -109,12 +101,10 @@ void consoleLog(const char* out) {
     }
 }
 
-int PRIMARY_AC = LOW;
-int SECONDARY_AC = HIGH;
-int PUMP_OFF = LOW;
-int PUMP_ON = HIGH;
-
-// Tmp Butons
+const int PRIMARY_AC = LOW;
+const int SECONDARY_AC = HIGH;
+const int PUMP_OFF = LOW;
+const int PUMP_ON = HIGH;
 
 void setPumpStatus(int value, int pump) {
     digitalWrite(pump, value);
@@ -125,42 +115,10 @@ void setPumpStatus(int value, int pump) {
 // DallasTemperature sensors(&oneWire);  // Pass our oneWire reference to Dallas Temperature.
 DS18 sensor(ONE_WIRE_BUS);
 #define TEMPERATURE_PRECISION 12
-uint8_t water_temp_addr[8];
-
-// DEPTH SENSING
-#define VREF_DEPTH 3470.0 // ADC's reference voltage
-
-unsigned int readAnaloguePin(int COUNTS, int INPUT_PIN) {
-    unsigned int peakVoltage = 0;
-    bool skipRead = false;
-    for (int i = 0; i < COUNTS; i++) {
-        int rawValue = analogRead(INPUT_PIN);   //read peak voltage
-        if (rawValue > 0) {
-            peakVoltage += rawValue;
-        } else {
-            Serial.print("^");
-            skipRead = true;
-            i--; // count agin
-        }
-        delay(1);
-    }
-
-    if (skipRead) {
-        Serial.println("\\/");
-    }
-
-    peakVoltage = peakVoltage / COUNTS;
-
-    return peakVoltage;
-}
-
-float readAnaloguePin(int INPUT_PIN) {
-    return readAnaloguePin(5, INPUT_PIN);
-}
+uint8_t water_temperature_sensor_one_wire_address[8];
 
 
 void callback(char *topic, byte *payload, unsigned int length);
-
 MQTT client("10.10.10.59", 1883, callback); //think to fix this warning we need to create a const char* for String assignemnt and copy it in to the a char* for the API. :(
 
 void callback(char *topic, byte *payload, unsigned int length) {
@@ -174,7 +132,6 @@ void callback(char *topic, byte *payload, unsigned int length) {
     // snprintf(message, sizeof(message), "received %s", p);
     // consoleLog(message);
 }
-
 
 void clientConnect() {
     char message[sizeof(dev_name)+16];
@@ -215,8 +172,7 @@ void deviceNameHandler(const char *topic, const char *data) {
     Particle.unsubscribe();  // Note this will unsubscribe all handlers. Currently we only have one so no biggie.
 }
 
-void mayday() {
-    // potentially update some retain value.
+void mayday() {    
    resetCounter++;
    System.reset();
 }
@@ -228,14 +184,8 @@ void setup() {
     }
     consoleLog("Device Startup");
 
-
     wd = new ApplicationWatchdog(5min, mayday);
     
-    // pinMode(ABUT2, INPUT_PULLDOWN);
-    // pinMode(ABUT3, INPUT_PULLDOWN);
-
-    // pinMode(BUT2, INPUT_PULLDOWN);
-
     pinMode(DC_POWER_GOOD, INPUT_PULLUP);    
 
     pinMode(AC_SELECTION, OUTPUT);
@@ -255,10 +205,9 @@ void setup() {
     }
 #endif
 
-
     //External Sensor
     if (sensor.read()) {
-        sensor.addr(water_temp_addr);
+        sensor.addr(water_temperature_sensor_one_wire_address);
     }
 
     // Setup Depth Sensing
@@ -269,12 +218,12 @@ void setup() {
 
     // Configure Device
     consoleLog("Awaiting Particle Connection");
-    waitUntil(Particle.connected);
+
+    waitUntil(Particle.connected); // As we now use SYSTEM_THREAD enabled Particle connection may not be established by here.
     consoleLog("Awaiting Particle Connected");
     Particle.subscribe("particle/device/name", deviceNameHandler,
                        MY_DEVICES); // Use of MY_DEVICES as we are targeting old 1.5 API
     Particle.publish("particle/device/name", PRIVATE);
-
 }
 
 // MQTT Signal Names
@@ -283,6 +232,9 @@ const char* CURRENT_SIGNAL = "current";
 const char* PUMP_SIGNAL = "pump";
 const char* TEMPERATURE_SIGNAL = "temperature";
 const char* HUMIDITY_SIGNAL = "humidity";
+const char* FAILOVER_SIGNAL = "power/failover";
+const char* POWER_ALARM_SIGNAL = "power/alarm";
+
 
 //todo enum update types.. shared library with other clients
 const char* LIVE = "live";
@@ -367,7 +319,6 @@ void publishState(const char* signal, const char* value) {
 
 const char* PRIMARY = "primary";
 const char* SECONDARY = "secondary";
-
 void publishCurrent(const char* circuit, float current) {
 
     char message[sizeof(circuit) + sizeof(CURRENT_SIGNAL) +2];
@@ -375,9 +326,6 @@ void publishCurrent(const char* circuit, float current) {
 
     publishLive(message, current);
 }
-
-int buttonStatus = false;
-// loop() runs over and over again, as quickly as it can execute.
 
 float voltage; //unit:mV
 float current;  //unit:mA
@@ -426,7 +374,7 @@ void monitorDepthSensor(){
 }
 
 void externalTemp() {
-    if (sensor.read(water_temp_addr)) {
+    if (sensor.read(water_temperature_sensor_one_wire_address)) {
         float tempc = sensor.celsius();        
         publishLive(TEMPERATURE_SIGNAL,  tempc);
     }
@@ -460,7 +408,6 @@ void internalTemp() {
                 
                 publishLiveInternal(HUMIDITY_SIGNAL, DHT.getHumidity());                
                 publishLiveInternal(TEMPERATURE_SIGNAL, DHT.getCelsius());                
-
                 break;
             case DHTLIB_ERROR_CHECKSUM:
                 consoleLog("Error\n\r\tChecksum error");
@@ -567,11 +514,7 @@ const long POWER_REPORTING_PERIOD = 1000;
 
 long failoversSinceLastPower = 0;
 
-const char* FAILOVER_SIGNAL = "power/failover";
-const char* POWER_ALARM_SIGNAL = "power/alarm";
-
 const int MAX_FAILOVERS_WITHOUT_POWER = 3600 / FAILOVER_STEADY_STATE; // 1Hr of constant failover before alarm
-
 void publishCircuitStatus(const char* updateType, const char* state, int circuitStatus){
 
     const char* primaryPattern = "power/%s/primary";
@@ -683,7 +626,7 @@ void checkMainPower() {
 
 float readACCurrentValue(int ACPin)
 {
-    float ACCurrtntValue = 0;
+    float ACCurrentValue = 0;
     float peakVoltage = 0;  
     float voltageVirtualValue = 0;  //Vrms
     for (int i = 0; i < 5; i++)
@@ -697,9 +640,9 @@ float readACCurrentValue(int ACPin)
     /*The circuit is amplified by 2 times, so it is divided by 2.*/
     voltageVirtualValue = (voltageVirtualValue / 1024 * VREF ) / 2;  
 
-    ACCurrtntValue = voltageVirtualValue * AC_DETECTION_RANGE;
+    ACCurrentValue = voltageVirtualValue * AC_DETECTION_RANGE;
 
-    return ACCurrtntValue;
+    return ACCurrentValue;
 }
 
 void monitorACCurrentUsage(){
@@ -777,7 +720,14 @@ void loop() {
 
     // Perform Pump control
 
+    // todo Create State Model 
+    // Update Model on each loop
+    // Check here if state is in a pumping situation    
 
+    // update to use retained for last active pump    
+
+    // todo also
+    // MQTT subscribe so we can async update state i.e. allow for pump testing
 
     updateParticle();
 }
