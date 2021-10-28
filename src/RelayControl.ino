@@ -28,9 +28,10 @@ STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 char dev_name[32] = "";
 bool configured = false;
-char VERSION[64] = "2.7.3";
+char VERSION[64] = "2.7.4";
 
 /*
+// 2.7.4 - set the internal sensor char buffer to fixed 40. sizeof isn't varying the buffer based on type. odd.
 // 2.7.3 - Cleaned up code added Particle.Publish of heartbeet to aid in understanding if device is working.
 // 2.7.2 - improve heartbeat for Home Assistant display 0/1 alternate
 // 2.7.1 - message power/%s/{primary|secondary} was being truncated by 3 chars. So gave up debug and went for [32] as that is much larger than needed.
