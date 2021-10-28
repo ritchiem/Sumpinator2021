@@ -298,8 +298,6 @@ void publishLive(const char* signal, float value) {
     publishMQTT(LIVE, signal, message);
 }
 
-
-
 void publishLive(const char* signal, const char* value) {
     publishMQTT(LIVE, signal, value);
 }
@@ -382,9 +380,8 @@ void externalTemp() {
 
 
 void publishLiveInternal(const char * type, float value){    
-    char message[10+sizeof(type)];
+    char message[40];
     snprintf(message, sizeof(message), "internal/%s", type);
-
     publishLive(message, value);
 }
 
