@@ -28,9 +28,12 @@ STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 char dev_name[32] = "";
 bool configured = false;
-char VERSION[64] = "2.7.4";
+char VERSION[64] = "2.7.7";
 
 /*
+// 2.7.7 - Add bi daily reset counter
+// 2.7.6 - Add uptime metric
+// 2.7.5 - Add 2 day timer to reset() device. as it seems like it is locking up.
 // 2.7.4 - set the internal sensor char buffer to fixed 40. sizeof isn't varying the buffer based on type. odd.
 // 2.7.3 - Cleaned up code added Particle.Publish of heartbeet to aid in understanding if device is working.
 // 2.7.2 - improve heartbeat for Home Assistant display 0/1 alternate
@@ -78,7 +81,9 @@ const int DEPTH_INPUT = A0;
 bool INTERNAL_TEMP_SENSING = true;
 bool DEPTH_SENSING = true;
 
+// Retained Values - Order in file matters as it maps to memory location.
 retained long resetCounter = 0; // retained stores in SRAM so survives reset. requires above STARTUP() command to enable.
+retained long bidailyResetCounter = 0;
 
 #ifdef INTERNAL_SENSING_CODE
 
@@ -175,6 +180,12 @@ void deviceNameHandler(const char *topic, const char *data) {
 
 void mayday() {    
    resetCounter++;
+   System.reset();
+}
+
+Timer bidailyReset(1000*60*60*24*2, do_bidaily_reset); //rest every 2 days
+void do_bidaily_reset() {    
+   bidailyResetCounter++;
    System.reset();
 }
 
@@ -662,6 +673,8 @@ void monitorWifiSignal(){
 void monitorSystem(){
     publishLive("system/memory", System.freeMemory());    
     publishLive("system/resetcounter", resetCounter);    
+    publishLive("system/bidailyresetcounter", bidailyResetCounter);    
+    publishLive("system/uptime", (unsigned long) System.uptime());
 }
 
 system_tick_t nextParticleUpdate;
