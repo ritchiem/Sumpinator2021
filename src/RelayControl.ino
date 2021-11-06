@@ -28,9 +28,10 @@ STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 char dev_name[32] = "";
 bool configured = false;
-char VERSION[64] = "2.7.7";
+char VERSION[64] = "2.7.8";
 
 /*
+// 2.7.8 - Shorten to daily reset counter after a lockup close to the restart timer
 // 2.7.7 - Add bi daily reset counter
 // 2.7.6 - Add uptime metric
 // 2.7.5 - Add 2 day timer to reset() device. as it seems like it is locking up.
@@ -183,7 +184,7 @@ void mayday() {
    System.reset();
 }
 
-Timer bidailyReset(1000*60*60*24*2, do_bidaily_reset); //rest every 2 days
+Timer bidailyReset(1000*60*60*24 , do_bidaily_reset); //reset every day
 void do_bidaily_reset() {    
    bidailyResetCounter++;
    System.reset();
