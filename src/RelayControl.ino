@@ -28,9 +28,10 @@ STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 char dev_name[32] = "";
 bool configured = false;
-char VERSION[64] = "2.7.8";
+char VERSION[64] = "2.8.0";
 
 /*
+// 2.8.0 - If on secondary power attempt to fail back every 1h
 // 2.7.8 - Shorten to daily reset counter after a lockup close to the restart timer
 // 2.7.7 - Add bi daily reset counter
 // 2.7.6 - Add uptime metric
@@ -563,6 +564,25 @@ void clearCircuitStatus(const char* updateType, const char* state){
     publishMQTT(updateType, secondaryMessage, "0");
 }
 
+int swapCircuit(int circuitStatus){
+    int newCircuit;
+    switch (circuitStatus){
+    case PRIMARY_CIRCUIT:
+        newCircuit = SECONDARY_AC;
+        break;
+    default: // default swap to secondary
+    case SECONDARY_CIRCUIT:
+        newCircuit =  PRIMARY_AC;
+        break;
+    }   
+
+    setPumpStatus(newCircuit, AC_SELECTION);             
+    lastFailoverTime = millis();
+    return newCircuit;
+}
+
+unsigned long SECONDARY_CIRCUIT_FAILBACK_DELAY = 3600 * 60;
+
 void checkMainPower() {
     int powerStatus = digitalRead(DC_POWER_GOOD); 
     int circuitStatus = digitalRead(AC_SELECTION);
@@ -578,25 +598,18 @@ void checkMainPower() {
             publishLive("power/swaps", failoversSinceLastPower);        
 
             // swap power
-            int circuitToActivate;
-            switch (circuitStatus){
-                case PRIMARY_CIRCUIT:
-                circuitToActivate = SECONDARY_AC;
-                break;
-                default: // default swap to secondary
-                case SECONDARY_CIRCUIT:
-                circuitToActivate = PRIMARY_AC;
-                break;
-            }
-            
-            setPumpStatus(circuitToActivate, AC_SELECTION);
-            circuitStatus = circuitToActivate;
-            lastFailoverTime = millis();
+            circuitStatus = swapCircuit(circuitStatus);            
         }
     }
 
     if (millis() > nextPowerMeasure) {        
         if (powerStatus == POWER_ON){
+
+            //check secondary Status
+            if (circuitStatus == SECONDARY_CIRCUIT && millis() > lastFailoverTime + SECONDARY_CIRCUIT_FAILBACK_DELAY){
+                circuitStatus = swapCircuit(circuitStatus);            
+            }
+
             publishCircuitStatus(LIVE, "active", circuitStatus);
             publishCircuitStatus(STATE, "active", circuitStatus); // not sure we need both ..state should be a persistent publish
             publishState("power/dcinput", powerStatus);
@@ -729,6 +742,8 @@ void loop() {
 #endif
 
     }
+
+    //
 
     // Perform Pump control
 
